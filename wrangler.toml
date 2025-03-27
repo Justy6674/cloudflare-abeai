@@ -3,3 +3,7 @@ main = "src/index.js"
 compatibility_date = "2025-03-27"
 usage_model = "bundled"
 workers_dev = true
+
+[[kv_namespaces]]
+binding = "ABEAI_KV"
+id = "5084daa861547bab2771668a729620cd"  # ← copy this from your Cloudflare screen
