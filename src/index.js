@@ -162,8 +162,8 @@ async function handleAIRequest(prompt, env) {
       throw new Error("OpenAI API key is missing. Set it with 'wrangler secret put OPENAI_KEY'");
     }
     
-    // Make request to OpenAI API
-    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    // Make request to OpenAI API via AI Gateway
+    const openaiRes = await fetch("https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.OPENAI_KEY}`,
@@ -220,15 +220,20 @@ export default {
   async fetch(request, env) {
     // Start timing for performance tracking
     const startTime = Date.now();
-    
+
+    // Define CORS headers
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*", // Allow requests from any origin
+      "Access-Control-Allow-Methods": "POST, OPTIONS", // Allow POST and OPTIONS methods
+      "Access-Control-Allow-Headers": "Content-Type", // Allow Content-Type header
+      "Access-Control-Max-Age": "86400" // Cache preflight response for 24 hours
+    };
+
     // Handle CORS preflight requests
     if (request.method === "OPTIONS") {
       return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type"
-        }
+        status: 204, // No Content
+        headers: corsHeaders
       });
     }
 
@@ -241,7 +246,7 @@ export default {
         status: 405,
         headers: { 
           "Content-Type": "application/json", 
-          "Access-Control-Allow-Origin": "*" 
+          ...corsHeaders
         }
       });
     }
@@ -256,7 +261,7 @@ export default {
         status: 400,
         headers: { 
           "Content-Type": "application/json", 
-          "Access-Control-Allow-Origin": "*" 
+          ...corsHeaders
         }
       });
     }
@@ -272,7 +277,7 @@ export default {
         status: 400,
         headers: { 
           "Content-Type": "application/json", 
-          "Access-Control-Allow-Origin": "*" 
+          ...corsHeaders
         }
       });
     }
@@ -351,7 +356,7 @@ export default {
         status: 200,
         headers: { 
           "Content-Type": "application/json", 
-          "Access-Control-Allow-Origin": "*" 
+          ...corsHeaders
         }
       });
     } catch (err) {
@@ -371,7 +376,7 @@ export default {
         status: 500,
         headers: { 
           "Content-Type": "application/json", 
-          "Access-Control-Allow-Origin": "*" 
+          ...corsHeaders
         }
       });
     }
