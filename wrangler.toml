@@ -1,9 +1,7 @@
 name = "abeai-proxy"
-main = "src/index.js"
-compatibility_date = "2023-03-27"
-usage_model = "bundled"
-workers_dev = true
+main = "index.js"
+compatibility_date = "2024-03-27"  # Example recent date
 
-[[kv_namespaces]]
-binding = "ABEAI_KV"
-id = "508da4aa8615147bab277168a729620d"
+kv_namespaces = [
+    { binding = "ABEAI_KV", id = "5084daa8615147bab2771668a729620d" }
+]
