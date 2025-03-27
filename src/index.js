@@ -1,82 +1,131 @@
-// ✅ AbeAI Cloudflare Worker – Smart, AI-powered fallback + Supabase support
-// Handles monetization triggers, OpenAI fallback, allergy-aware tone, and routing
-
 const SUPABASE_FUNCTION_URL = "https://ekfpageqwbwvwbcoudig.supabase.co/functions/v1/send-message";
+const SUPABASE_URL = "https://ekfpageqwbwvwbcoudig.supabase.co";
+const SUPABASE_KEY = "your-supabase-key"; // Replace with your Supabase key, or store in env.SUPABASE_KEY
 
-const MONETIZATION_TRIGGERS = [
-  {
-    keywords: ["snack", "meal", "protein", "recipe", "diet", "lunchbox", "takeaway", "food"],
-    response: "Here are some quick high-protein snack ideas:\n1. Greek yogurt with berries\n2. Edamame\n3. Cheese & whole grain crackers.\nFor meal plans and personalised recipes, upgrade to Essentials.",
-    tier: "Essentials",
-    category: "nutrition"
-  },
-  {
-    keywords: ["exercise", "workout", "gym", "walk", "fitness", "activity", "movement"],
-    response: "Here’s a starter workout plan:\n• 10 squats\n• 10 pushups\n• 30 sec plank\nUpgrade to Essentials for a personalised weekly plan.",
-    tier: "Essentials",
-    category: "activity"
-  },
-  {
-    keywords: ["water", "hydration", "fluid", "drink"],
-    response: "Staying hydrated is vital. Aim for 2–3L water daily.\nPremium offers hydration tracking and reminders.",
-    tier: "Premium",
-    category: "hydration"
-  },
-  {
-    keywords: ["mounjaro", "ozempic", "wegovy", "medication", "phentermine", "saxenda"],
-    response: "Weight loss medications require supervision.\nFor clinical guidance in Australia, visit https://www.downscale.com.au or consult your GP.\nOur Premium tier includes private medication support.",
-    tier: "Premium",
-    category: "medication"
-  },
-  {
-    keywords: ["depression", "sleep", "mental", "mood", "anxiety", "stress"],
-    response: "Mental health is central to wellness.\nI’m here to support you. For structured emotional coaching, consider Premium.",
-    tier: "Premium",
-    category: "mental_health"
+// Base prompt defining the bot's personality
+const basePrompt = `
+You are AbeAI, an empathetic, data-driven health coach. 
+If the user asks about food, consider their allergies and suggest appropriate snacks or meals.
+If they ask about exercise, take into account time, fitness level, and motivation.
+Always suggest hydration. Never use shame, always motivational language.
+For users identified as Australian (based on user_context), refer them to www.downscale.com.au for upgrades and use PT (Portuguese) as the first language for responses, per www.worldobesity.org guidelines.
+`;
+
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request));
+});
+
+async function handleRequest(request) {
+  // Handle CORS preflight requests
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey"
+      }
+    });
   }
-];
 
-function detectTriggerCategory(message) {
-  const lower = message.toLowerCase();
-  for (const trigger of MONETIZATION_TRIGGERS) {
-    if (trigger.keywords.some(keyword => lower.includes(keyword))) {
-      return trigger;
-    }
+  // Parse the request body
+  let body = {};
+  try {
+    body = await request.json();
+    console.log("Request body:", body);
+  } catch (err) {
+    console.error("Failed to parse JSON body:", err.message);
+    return new Response(JSON.stringify({
+      response: "Sorry, I couldn’t process that right now.",
+      debug: "Invalid JSON payload: " + err.message
+    }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
   }
-  return null;
-}
 
-export default {
-  async fetch(request, env, ctx) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
+  const { message, user_id = null, subscription_tier = "PAYG", user_context = {}, prompt = [] } = body;
+
+  // Validate required fields
+  if (!message) {
+    return new Response(JSON.stringify({
+      response: "Message is missing from request.",
+      debug: "Missing 'message' field"
+    }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
+  }
+
+  if (!user_id) {
+    return new Response(JSON.stringify({
+      response: "User ID is missing from request.",
+      debug: "Missing 'user_id' field"
+    }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
+  }
+
+  try {
+    // Fetch user history and context from Supabase
+    let userHistory = [];
+    let userData = {};
+    try {
+      const supabaseRes = await fetch(`${SUPABASE_URL}/rest/v1/user_history?user_id=eq.${user_id}`, {
+        method: "GET",
         headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey"
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+          "apikey": SUPABASE_KEY
         }
       });
+      userData = await supabaseRes.json();
+      userHistory = userData.length > 0 ? userData[0].history || [] : [];
+    } catch (err) {
+      console.error("Failed to fetch user history from Supabase:", err.message);
+      userHistory = [];
     }
 
+    // Update user history
+    userHistory.push(message);
     try {
-      const bodyText = await request.text();
-      const body = JSON.parse(bodyText);
+      await fetch(`${SUPABASE_URL}/rest/v1/user_history`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+          "apikey": SUPABASE_KEY
+        },
+        body: JSON.stringify({
+          user_id: user_id,
+          history: userHistory
+        })
+      });
+    } catch (err) {
+      console.error("Failed to update user history in Supabase:", err.message);
+    }
 
-      const { message, user_id = null, subscription_tier = "PAYG", allergies = [] } = body;
-      if (!message) throw new Error("Message missing");
+    // Extract user context
+    const { allergies = [], fitnessLevel = "beginner", motivationLevel = "moderate", isAustralian = false } = user_context;
 
-      const trigger = detectTriggerCategory(message);
+    // Construct the full prompt with user context and history
+    const fullPrompt = prompt.length > 0 ? prompt : [
+      {
+        role: "system",
+        content: `${basePrompt}\nUser context: Allergies: ${allergies.join(", ") || "none"}, Fitness level: ${fitnessLevel}, Motivation level: ${motivationLevel}, Is Australian: ${isAustralian}.\nUser history: ${userHistory.join("; ")}`
+      },
+      { role: "user", content: message }
+    ];
 
-      if (!user_id || subscription_tier === "PAYG") {
-        if (trigger) {
-          return new Response(JSON.stringify({
-            response: trigger.response,
-            upgrade_suggested: true
-          }), {
-            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-          });
-        }
+    console.log("Full prompt:", fullPrompt);
 
+    // Determine if the user should use OpenAI or Supabase
+    let response;
+    let upgradeSuggested = subscription_tier !== "Premium";
+
+    if (subscription_tier === "PAYG") {
+      // Use OpenAI for PAYG users
+      try {
         const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -85,49 +134,77 @@ export default {
           },
           body: JSON.stringify({
             model: "gpt-3.5-turbo",
-            messages: [
-              {
-                role: "system",
-                content: `You are AbeAI, a friendly, supportive Australian health coach. Be kind, use evidence-based guidelines. If asked about clinics, refer users to https://www.downscale.com.au. If helpful, refer to https://www.worldobesity.org.`
-              },
-              { role: "user", content: message }
-            ]
+            messages: fullPrompt
           })
         });
 
-        const aiData = await openaiRes.json();
-        const reply = aiData?.choices?.[0]?.message?.content || "I'm here to help you, whenever you're ready.";
+        if (!openaiRes.ok) {
+          const errorText = await openaiRes.text();
+          throw new Error(`OpenAI request failed: ${openaiRes.status} - ${errorText}`);
+        }
 
-        return new Response(JSON.stringify({ response: reply }), {
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-        });
+        const data = await openaiRes.json();
+        response = data?.choices?.[0]?.message?.content || "I'm here to help, whenever you're ready.";
+      } catch (err) {
+        console.error("OpenAI error:", err.message);
+        response = "Sorry, I couldn’t process that right now. Let’s try something else!";
       }
+    } else {
+      // Use Supabase for non-PAYG users
+      try {
+        const supabaseRes = await fetch(SUPABASE_FUNCTION_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": request.headers.get("Authorization"),
+            "apikey": request.headers.get("apikey")
+          },
+          body: JSON.stringify({
+            message,
+            user_id,
+            subscription_tier,
+            user_context,
+            prompt: fullPrompt
+          })
+        });
 
-      const supabaseRes = await fetch(SUPABASE_FUNCTION_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": request.headers.get("Authorization"),
-          "apikey": request.headers.get("apikey")
-        },
-        body: JSON.stringify(body)
-      });
+        if (!supabaseRes.ok) {
+          const errorText = await supabaseRes.text();
+          throw new Error(`Supabase request failed: ${supabaseRes.status} - ${errorText}`);
+        }
 
-      const json = await supabaseRes.json();
-      return new Response(JSON.stringify({
-        response: json.response || "I’m here to support you.",
-        upgrade_suggested: json.upgrade_suggested || false
-      }), {
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-      });
-    } catch (err) {
-      return new Response(JSON.stringify({
-        response: "Sorry, I couldn’t process that right now.",
-        debug: err.message
-      }), {
-        status: 500,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-      });
+        const json = await supabaseRes.json();
+        response = json.response || "I’m here to support you.";
+        upgradeSuggested = json.upgrade_suggested || false;
+      } catch (err) {
+        console.error("Supabase error:", err.message);
+        response = "Sorry, I couldn’t process that right now. Let’s try something else!";
+      }
     }
+
+    // Add Australian-specific handling
+    if (isAustralian) {
+      if (upgradeSuggested) {
+        response += ` For more personalized plans, check out www.downscale.com.au to upgrade your subscription!`;
+      }
+      // Simulate PT (Portuguese) as the first language (simplified for now; actual translation would require an API or dictionary)
+      response = `[PT] Olá! ${response} [EN] Hello! ${response}`;
+    }
+
+    // Ensure the response is a valid JSON object
+    const responseBody = { response, upgrade_suggested: upgradeSuggested };
+    console.log("Response body:", responseBody);
+
+    return new Response(JSON.stringify(responseBody), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
+  } catch (err) {
+    console.error("Worker error:", err.message);
+    const errorResponse = { error: "Internal Server Error", details: err.message };
+    return new Response(JSON.stringify(errorResponse), {
+      status: 500,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
   }
-};
+}
