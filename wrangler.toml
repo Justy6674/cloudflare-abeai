@@ -1,9 +1,9 @@
 name = "abeai-proxy"
 main = "src/index.js"
-compatibility_date = "2025-03-27"
+compatibility_date = "2023-03-27"
 usage_model = "bundled"
 workers_dev = true
 
 [[kv_namespaces]]
 binding = "ABEAI_KV"
-id = "5084daae861547bab2771668a729620d" # ← use the exact ID from your KV screenshot
+id = "508da4aa8615147bab277168a729620d"
