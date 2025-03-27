@@ -1,4 +1,4 @@
-// abeai-cloudflare-worker/index.js
+// abeai-cloudflare-worker/index.js - FINAL VERSION
 
 // Cloudflare KV bound as ABEAI_KV via wrangler.toml
 const BASE_PROMPT = `
@@ -15,6 +15,7 @@ If the user is a Premium member, provide more detailed, personalized advice (e.g
 Always ask a follow-up question to keep the conversation engaging (e.g., "Would you like a personalized plan?").
 `;
 
+// Parse JSON with error handling
 async function parseJSON(request) {
   try {
     return await request.json();
@@ -23,44 +24,145 @@ async function parseJSON(request) {
   }
 }
 
+// Get user history from KV with robust error handling
 async function getHistory(user_id, env) {
+  if (!user_id) {
+    console.warn("Missing user_id in getHistory");
+    return [];
+  }
+
   try {
-    const raw = await env.ABEAI_KV.get(`history:${user_id}`);
-    return raw ? JSON.parse(raw) : [];
+    // Verify KV binding
+    if (!env.ABEAI_KV) {
+      console.error("ABEAI_KV namespace not bound to worker. Check wrangler.toml configuration.");
+      return []; // Return empty array to continue the flow
+    }
+
+    const key = `history:${user_id}`;
+    console.log(`Fetching history for user ${user_id} with key ${key}`);
+    
+    const raw = await env.ABEAI_KV.get(key);
+    
+    if (!raw) {
+      console.log(`No history found for user ${user_id}`);
+      return [];
+    }
+    
+    try {
+      const parsed = JSON.parse(raw);
+      console.log(`Retrieved ${parsed.length} history items for user ${user_id}`);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (parseErr) {
+      console.error(`Failed to parse history JSON for user ${user_id}:`, parseErr);
+      return [];
+    }
   } catch (err) {
-    console.error(`Failed to fetch history for user ${user_id} from KV:`, err.message);
+    console.error(`Error fetching history for user ${user_id}:`, err.message);
     return []; // Return empty array on error to prevent breaking the flow
   }
 }
 
+// Save user history to KV with robust error handling
 async function saveHistory(user_id, message, env) {
+  if (!user_id || !message) {
+    console.warn("Missing user_id or message in saveHistory");
+    return false;
+  }
+
   try {
+    // Verify KV binding
+    if (!env.ABEAI_KV) {
+      console.error("ABEAI_KV namespace not bound to worker. Check wrangler.toml configuration.");
+      return false;
+    }
+    
+    // Get existing history
     const history = await getHistory(user_id, env);
+    
+    // Add new message and limit to last 10
     history.push(message);
-    await env.ABEAI_KV.put(`history:${user_id}`, JSON.stringify(history.slice(-10))); // Limit history to 10 entries
-    console.log(`Saved history for user ${user_id}:`, history);
+    const limitedHistory = history.slice(-10);
+    
+    // Save to KV
+    const key = `history:${user_id}`;
+    await env.ABEAI_KV.put(key, JSON.stringify(limitedHistory));
+    
+    console.log(`Saved ${limitedHistory.length} history items for user ${user_id}`);
     return true;
   } catch (err) {
-    console.error(`Failed to save history for user ${user_id} to KV:`, err.message);
-    return false; // Return false to indicate failure but don't throw error
+    console.error(`Failed to save history for user ${user_id}:`, err.message);
+    return false;
   }
 }
 
+// Build prompt with robust type checking and formatting
 function buildPrompt({ message, context, history }) {
-  const { allergies = [], fitnessLevel = "beginner", motivationLevel = "moderate", isAustralian = false } = context;
-  const contextBlock = `User context:\nAllergies: ${allergies.join(", ") || "none"}, Fitness level: ${fitnessLevel}, Motivation: ${motivationLevel}, Is Australian: ${isAustralian}`;
-  const historyBlock = `History: ${history.length ? history.join("; ") : "No previous history"}`;
+  // Safe handling of context with defaults
+  const safeContext = typeof context === 'object' && context !== null ? context : {};
+  
+  // Handle allergies safely
+  let allergies = [];
+  if (Array.isArray(safeContext.allergies)) {
+    allergies = safeContext.allergies;
+  } else if (safeContext.allergies) {
+    try {
+      // Try to handle if allergies was passed as a string
+      allergies = [safeContext.allergies.toString()];
+    } catch (e) {
+      console.warn("Could not process allergies:", e);
+    }
+  }
+  
+  // Handle other context fields with defaults
+  const fitnessLevel = typeof safeContext.fitnessLevel === 'string' ? safeContext.fitnessLevel : "beginner";
+  const motivationLevel = typeof safeContext.motivationLevel === 'string' ? safeContext.motivationLevel : "moderate";
+  const isAustralian = !!safeContext.isAustralian;
+  
+  // Safely handle history
+  const safeHistory = Array.isArray(history) ? history : [];
+  
+  // Build context block with properly formatted data
+  const contextBlock = `User context:
+Allergies: ${allergies.length > 0 ? allergies.join(", ") : "none"}
+Fitness level: ${fitnessLevel}
+Motivation: ${motivationLevel}
+Is Australian: ${isAustralian}`;
 
+  // Build history block
+  const historyBlock = safeHistory.length > 0 
+    ? `History: ${safeHistory.join("; ")}`
+    : "History: No previous interactions";
+
+  // Log the constructed blocks for debugging
+  console.log("Context block:", contextBlock);
+  console.log("History block:", historyBlock);
+
+  // Return the complete prompt
   return [
-    { role: "system", content: `${BASE_PROMPT}\n${contextBlock}\n${historyBlock}` },
-    { role: "user", content: message }
+    { 
+      role: "system", 
+      content: `${BASE_PROMPT}\n\n${contextBlock}\n\n${historyBlock}` 
+    },
+    { 
+      role: "user", 
+      content: message 
+    }
   ];
 }
 
+// Handle OpenAI API request with comprehensive error handling
 async function handleAIRequest(prompt, env) {
   try {
-    console.log("Sending request to OpenAI with prompt:", JSON.stringify(prompt));
+    // Log prompt structure for debugging (without full content for privacy)
+    console.log("Sending request to OpenAI with prompt structure:", 
+      JSON.stringify(prompt.map(msg => ({role: msg.role, contentLength: msg.content.length}))));
     
+    // Verify OpenAI API key exists
+    if (!env.OPENAI_KEY) {
+      throw new Error("OpenAI API key is missing. Set it with 'wrangler secret put OPENAI_KEY'");
+    }
+    
+    // Make request to OpenAI API
     const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -69,32 +171,56 @@ async function handleAIRequest(prompt, env) {
       },
       body: JSON.stringify({
         model: "gpt-3.5-turbo",
-        messages: prompt
+        messages: prompt,
+        temperature: 0.7
       })
     });
 
+    // Handle HTTP errors
     if (!openaiRes.ok) {
-      const errorData = await openaiRes.json().catch(() => null) || await openaiRes.text();
-      console.error(`OpenAI API error (${openaiRes.status}):`, errorData);
-      throw new Error(`OpenAI API returned ${openaiRes.status}: ${JSON.stringify(errorData)}`);
+      let errorText;
+      try {
+        const errorJson = await openaiRes.json();
+        errorText = JSON.stringify(errorJson);
+      } catch (e) {
+        errorText = await openaiRes.text();
+      }
+      
+      console.error(`OpenAI API error (${openaiRes.status}): ${errorText}`);
+      
+      // Provide specific error messages for common issues
+      if (openaiRes.status === 401) {
+        throw new Error("OpenAI API key is invalid. Check your OPENAI_KEY in Cloudflare secrets.");
+      } else if (openaiRes.status === 429) {
+        throw new Error("OpenAI API rate limit exceeded. Try again later or upgrade your plan.");
+      } else {
+        throw new Error(`OpenAI API error: ${openaiRes.status} - ${errorText}`);
+      }
     }
 
+    // Parse response
     const data = await openaiRes.json();
-    console.log("OpenAI response:", JSON.stringify(data));
+    console.log("OpenAI response received with tokens:", data.usage?.total_tokens || "unknown");
     
-    if (!data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
-      throw new Error("Invalid OpenAI response format: " + JSON.stringify(data));
+    // Validate response format
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      console.error("Invalid OpenAI response format:", JSON.stringify(data));
+      throw new Error("Invalid response format from OpenAI API");
     }
 
     return data.choices[0].message.content;
   } catch (err) {
-    console.error("handleAIRequest error:", err);
-    throw new Error(`Failed to process AI request: ${err.message}`);
+    console.error("AI request failed:", err.message, err.stack);
+    throw new Error(`AI request failed: ${err.message}`);
   }
 }
 
+// Main worker export
 export default {
   async fetch(request, env) {
+    // Start timing for performance tracking
+    const startTime = Date.now();
+    
     // Handle CORS preflight requests
     if (request.method === "OPTIONS") {
       return new Response(null, {
@@ -135,9 +261,9 @@ export default {
       });
     }
 
+    // Extract and validate request fields
     const { message, user_id, subscription_tier = "PAYG", user_context = {} } = parsed;
 
-    // Validate required fields
     if (!message || !user_id) {
       return new Response(JSON.stringify({ 
         response: "I need both a message and user ID to help you properly.", 
@@ -152,53 +278,75 @@ export default {
     }
 
     try {
-      // Log the incoming request for debugging
+      // Log the incoming request for debugging (without full message for privacy)
       console.log("Request:", { 
-        message, 
+        messageLength: message.length,
         user_id, 
         subscription_tier, 
-        user_context 
+        user_context: JSON.stringify(user_context)
       });
       
-      // Fetch and update user history using Cloudflare KV
+      // Verify environment configuration
+      if (!env.ABEAI_KV) {
+        console.error("ABEAI_KV namespace not bound. Check wrangler.toml configuration.");
+      }
+      
+      if (!env.OPENAI_KEY) {
+        console.error("OPENAI_KEY not found. Set it with 'wrangler secret put OPENAI_KEY'");
+      }
+      
+      // Save message to history
       const historySaved = await saveHistory(user_id, message, env);
       if (!historySaved) {
         console.warn(`Failed to save history for user ${user_id}, continuing anyway`);
       }
       
+      // Get user history
       const history = await getHistory(user_id, env);
-      console.log(`Retrieved history for user ${user_id}:`, history);
+      console.log(`Retrieved ${history.length} history items for user ${user_id}`);
 
-      // Build the prompt with user context and history
+      // Build the prompt
       const prompt = buildPrompt({ 
         message, 
-        context: user_context || {}, 
-        history: history || [] 
+        context: user_context, 
+        history
       });
-      console.log("Built prompt:", JSON.stringify(prompt));
-
-      // Call OpenAI for response
+      
+      // Get AI response
       let response = await handleAIRequest(prompt, env);
-      console.log("AI response:", response);
+      console.log("AI response received, length:", response.length);
 
-      // Add Australian-specific handling
+      // Apply Australian-specific handling if needed
       const upgradeSuggested = subscription_tier !== "Premium";
       if (user_context && user_context.isAustralian) {
         if (upgradeSuggested) {
           response += `\n\n[PT] Para suporte personalizado, acesse www.downscale.com.au.\n[EN] For personalized support, visit www.downscale.com.au.`;
           response += `\n\n[Link Button] <a href="https://www.downscale.com.au" target="_blank">Explore Subscription Options</a>`;
         }
-        // Simulate PT (Portuguese) as the first language
+        // Prepend Portuguese greeting
         response = `[PT] Olá! ${response}`;
       }
 
-      // Ensure the response is a valid JSON object
+      // Add upgrade suggestion for non-Premium users
+      if (upgradeSuggested && (!user_context || !user_context.isAustralian)) {
+        // Only add this if not already added for Australian users
+        response += `\n\n[Link Button] <a href="https://www.abeai.health/pricing" target="_blank">Upgrade for personalized plans</a>`;
+      }
+
+      // Create response object
       const responseBody = { 
         response, 
-        upgrade_suggested: upgradeSuggested 
+        upgrade_suggested: upgradeSuggested,
+        debug: {
+          user_id,
+          subscription_tier,
+          history_length: history.length,
+          is_australian: !!user_context.isAustralian,
+          processing_time_ms: Date.now() - startTime
+        }
       };
-      console.log("Final response body:", JSON.stringify(responseBody));
-
+      
+      // Return successful response
       return new Response(JSON.stringify(responseBody), {
         status: 200,
         headers: { 
@@ -207,11 +355,18 @@ export default {
         }
       });
     } catch (err) {
+      // Detailed error logging
       console.error("Worker error:", err.message, err.stack);
+      
+      // Create user-friendly error response with debugging details
       return new Response(JSON.stringify({ 
-        response: "I'm having trouble processing that right now. Let me try to help another way—could you rephrase your question?", 
-        debug: err.message,
-        stack: err.stack 
+        response: "I'm having trouble right now. Could you try again in a moment?", 
+        error: true,
+        debug: {
+          error: err.message,
+          time: new Date().toISOString(),
+          processing_time_ms: Date.now() - startTime
+        }
       }), {
         status: 500,
         headers: { 
