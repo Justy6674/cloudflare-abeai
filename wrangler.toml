@@ -1,7 +1,11 @@
 name = "abeai-proxy"
 main = "index.js"
-compatibility_date = "2024-03-27"  # Example recent date
+compatibility_date = "2024-03-27"  # Keep as is for now
 
 kv_namespaces = [
-    { binding = "ABEAI_KV", id = "5084daa8615147bab2771668a729620d" }
+  { binding = "ABEAI_KV", id = "5084daa8615147bab2771668a729620d" }
+]
+
+routes = [
+  { pattern = "api.abeai.health/*", custom_domain = true }
 ]
