@@ -1,89 +1,37 @@
-# PRODUCTION-READY WRANGLER CONFIG
-name = "abeai-prod-worker"
-main = "src/index.js"  # More structured source layout
+# ORIGINAL-COMPATIBLE IMPROVED CONFIG
+name = "abeai-proxy"  # ← Keeping your exact original worker name
+main = "index.js"
 compatibility_date = "2024-03-27"
-node_compat = true  # Enable Node.js compatibility if needed
 
-# ========================
-# DATA STORES
-# ========================
+# KV Storage (original binding + new analytics)
 kv_namespaces = [
-  # Primary KV for user data (existing)
   { binding = "ABEAI_KV", id = "5084daa8615147bab2771668a729620d" },
-  
-  # New analytics KV (create via CLI first)
   { binding = "ABEAI_ANALYTICS", id = "REPLACE_WITH_ANALYTICS_KV_ID" }
 ]
 
-# ========================
-# AI INTEGRATION
-# ========================
-ai = {
-  binding = "ABEAI_AI",
-  gateway = { 
-    account_id = "d9cc7ec108df8e78246e2553ae88c6c2",
-    # Uncomment for larger models:
-    # model_name = "gpt-4",
-    # cache_ttl = 60
-  }
-}
+# AI Gateway (new addition)
+[ai]
+binding = "ABEAI_AI"
+account_id = "d9cc7ec108df8e78246e2553ae88c6c2"
 
-# ========================
-# NETWORK CONFIG
-# ========================
+# Routes (original + health check)
 routes = [
   { pattern = "api.abeai.health/*", custom_domain = true },
-  # Health check endpoint
   { pattern = "status.abeai.health/ready", custom_domain = true }
 ]
 
-# ========================
-# PERFORMANCE
-# ========================
+# Enhanced performance limits
 [limits]
-cpu_ms = 10000  # Extended for complex AI prompts
-memory = 256    # MB - Increased for KV operations
+cpu_ms = 5000  # Original: 1000 (increased for AI ops)
+memory = 128   # MB (matches original)
 
 [build]
 upload.format = "modules"
-upload.dir = "dist"  # Build output directory
 upload.main = "./index.js"
 
-# ========================
-# OBSERVABILITY
-# ========================
-[logpush]
-enabled = true
-dataset = "workers_trace_events"
-frequency = "high"
-sampling_rate = 1.0  # 100% of logs
-
-[metrics]
-bindings = [
-  { name = "ABEAI_METRICS", type = "counter" }
-]
-
-# ========================
-# ENVIRONMENTS
-# ========================
+# Environment variables (new)
 [env.production]
-name = "abeai-prod"
-vars = {
-  OPENAI_MODEL = "gpt-3.5-turbo-1106",
-  MAX_HISTORY = "15",
-  RATE_LIMIT = "100/60"  # 100 reqs/minute
+vars = { 
+  MAX_HISTORY_ITEMS = "10",
+  OPENAI_MODEL = "gpt-3.5-turbo" 
 }
-
-[env.staging]
-name = "abeai-staging"
-vars = {
-  OPENAI_MODEL = "gpt-3.5-turbo",
-  MAX_HISTORY = "5",
-  RATE_LIMIT = "20/60"
-}
-
-[dev]
-ip = "localhost"
-port = 8787
-local_protocol = "https"
-live_reload = true
