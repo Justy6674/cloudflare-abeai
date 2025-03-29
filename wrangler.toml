@@ -1,37 +1,28 @@
-# ORIGINAL-COMPATIBLE IMPROVED CONFIG
-name = "abeai-proxy"  # ← Keeping your exact original worker name
+# PROPERLY FORMATTED ERROR-FREE CONFIG
+name = "abeai-proxy"
 main = "index.js"
 compatibility_date = "2024-03-27"
 
-# KV Storage (original binding + new analytics)
+# KV Storage (original binding)
 kv_namespaces = [
-  { binding = "ABEAI_KV", id = "5084daa8615147bab2771668a729620d" },
-  { binding = "ABEAI_ANALYTICS", id = "REPLACE_WITH_ANALYTICS_KV_ID" }
+  { binding = "ABEAI_KV", id = "5084daa8615147bab2771668a729620d" }
 ]
 
-# AI Gateway (new addition)
-[ai]
-binding = "ABEAI_AI"
-account_id = "d9cc7ec108df8e78246e2553ae88c6c2"
-
-# Routes (original + health check)
+# Routes (original)
 routes = [
-  { pattern = "api.abeai.health/*", custom_domain = true },
-  { pattern = "status.abeai.health/ready", custom_domain = true }
+  { pattern = "api.abeai.health/*", custom_domain = true }
 ]
 
-# Enhanced performance limits
+# Performance limits
 [limits]
-cpu_ms = 5000  # Original: 1000 (increased for AI ops)
-memory = 128   # MB (matches original)
+cpu_ms = 5000
+memory = 128
 
 [build]
 upload.format = "modules"
 upload.main = "./index.js"
 
-# Environment variables (new)
-[env.production]
-vars = { 
-  MAX_HISTORY_ITEMS = "10",
-  OPENAI_MODEL = "gpt-3.5-turbo" 
-}
+# Environment variables (simplified)
+[vars]
+ENVIRONMENT = "production"
+MAX_HISTORY_ITEMS = "10"
