@@ -94,7 +94,7 @@ function buildPrompt(userData, message) {
 
 async function handleAIRequest(messages, env) {
   try {
-    const response = await fetch("https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT/abeai-openai-gateway/openai/v1/chat/completions", {
+    const response = await fetch("https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.OPENAI_KEY}`,
