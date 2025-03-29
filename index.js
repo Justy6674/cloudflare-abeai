@@ -1,54 +1,81 @@
-// abeai-cloudflare-worker/index.js - OPTIMIZED VERSION
-
 const BASE_PROMPT = `
-You are AbeAI, an empathetic, data-driven health coach. Follow these rules:
-1. For free users: Provide basic advice with upsell prompts
-2. For PAYG/Essentials: Give mid-tier advice with occasional upsells
-3. For Premium: Offer detailed, personalized guidance
-4. Always consider allergies: {{ALLERGIES}}
-5. Adapt to fitness level: {{FITNESS_LEVEL}}
-6. For Australians: Include PT (Portuguese) responses first
-7. Never repeat answers - check history first
-8. End with engaging follow-up questions
+You are AbeAI, an empathetic, patient-first Australian health coach. Follow these rules strictly:
+1. Free tier: Brief helpful responses followed by respectful upsell.
+2. PAYG/Essentials: Moderate detail with occasional respectful upsell.
+3. Premium: Detailed personalised Australian-focused guidance.
+4. Consider allergies carefully: {{ALLERGIES}}
+5. Adapt advice strictly to user's fitness level: {{FITNESS_LEVEL}}
+6. For Australians, encourage clinical support and professional consultations if appropriate.
+7. Never repeat previous answers; always refer to history.
+8. End each response with an engaging follow-up question.
 `;
 
-// Monetization triggers (expanded from your original)
 const MONETIZATION_TRIGGERS = {
   nutrition: {
-    keywords: ["snack", "meal", "protein", "recipe", "diet"],
-    freeResponse: "Here are 3 ideas to start. For 20+ personalized options:",
-    upsell: "Upgrade to Essentials"
+    keywords: ["snack", "meal", "protein", "recipe", "diet", "nutrition"],
+    freeResponse: "Here’s a quick suggestion. For personalised Australian meal plans:",
+    button: "Explore Meal Plans",
+    url: "https://www.downscale.com.au/upgrade?category=nutrition"
   },
   fitness: {
-    keywords: ["workout", "exercise", "gym", "run"],
-    freeResponse: "Try this beginner routine. For custom plans:",
-    upsell: "Upgrade to Premium"
+    keywords: ["workout", "exercise", "gym", "run", "activity", "fitness"],
+    freeResponse: "Try this simple Aussie-friendly routine. For tailored fitness plans:",
+    button: "Get Your Fitness Plan",
+    url: "https://www.downscale.com.au/upgrade?category=fitness"
   },
-  // ... add other categories from your original list
+  metrics: {
+    keywords: ["bmi", "calories", "kilojoules", "weight", "body fat", "measurement"],
+    freeResponse: "Here's your basic summary. Want detailed, clinical-grade analysis?",
+    button: "Detailed Metrics Analysis",
+    url: "https://www.downscale.com.au/upgrade?category=metrics"
+  },
+  hydration: {
+    keywords: ["water", "hydration", "drink", "fluid"],
+    freeResponse: "Hydration matters, especially in Australia! Want personalised reminders?",
+    button: "Hydration Reminders",
+    url: "https://www.downscale.com.au/upgrade?category=hydration"
+  },
+  mentalHealth: {
+    keywords: ["stress", "sleep", "mood", "anxiety"],
+    freeResponse: "Mental health is vital. Interested in personalised mental wellbeing support?",
+    button: "Mental Health Coaching",
+    url: "https://www.downscale.com.au/upgrade?category=mental_health"
+  },
+  intimacy: {
+    keywords: ["intimacy", "relationship", "sex", "partner", "marriage"],
+    freeResponse: "Intimacy is important for wellbeing. Need secure, guided support?",
+    button: "Access Intimacy Coaching",
+    url: "https://www.downscale.com.au/upgrade?category=intimacy"
+  },
+  medication: {
+    keywords: ["medication", "dose", "side effects", "drug", "ozempic", "wegovy", "mounjaro"],
+    freeResponse: "Medication requires careful management. Seeking comprehensive support?",
+    button: "Secure Medication Guidance",
+    url: "https://www.downscale.com.au/upgrade?category=medication"
+  }
 };
 
 async function parseJSON(request) {
   try {
     return await request.json();
-  } catch (err) {
-    return { error: true, message: "Invalid JSON" };
+  } catch {
+    return { error: true, message: "Invalid JSON format." };
   }
 }
 
 async function getUserData(user_id, env) {
   try {
-    const data = await env.ABEAI_KV.get(`user:${user_id}`, "json");
-    return data || {
+    return await env.ABEAI_KV.get(`user:${user_id}`, "json") || {
       tier: "free",
       history: [],
-      context: { allergies: [], fitnessLevel: "beginner" }
+      context: { allergies: [], fitnessLevel: "beginner", motivationLevel: "moderate" }
     };
   } catch (err) {
     console.error("KV read error:", err);
     return {
       tier: "free",
       history: [],
-      context: { allergies: [], fitnessLevel: "beginner" }
+      context: { allergies: [], fitnessLevel: "beginner", motivationLevel: "moderate" }
     };
   }
 }
@@ -61,83 +88,55 @@ async function saveUserData(user_id, data, env) {
   }
 }
 
-function detectMonetizationCategory(message) {
+function detectTrigger(message) {
   const lowerMsg = message.toLowerCase();
   for (const [category, config] of Object.entries(MONETIZATION_TRIGGERS)) {
-    if (config.keywords.some(kw => lowerMsg.includes(kw))) {
-      return category;
-    }
+    if (config.keywords.some(keyword => lowerMsg.includes(keyword))) return category;
   }
   return null;
 }
 
-function buildPrompt(userData, message) {
-  const { tier, history, context } = userData;
-  const monetizationCategory = detectMonetizationCategory(message);
-
+function buildPrompt(userData, message, category) {
   let prompt = BASE_PROMPT
-    .replace("{{ALLERGIES}}", context.allergies?.join(", ") || "none")
-    .replace("{{FITNESS_LEVEL}}", context.fitnessLevel || "beginner");
+    .replace("{{ALLERGIES}}", userData.context.allergies.join(", ") || "none")
+    .replace("{{FITNESS_LEVEL}}", userData.context.fitnessLevel);
 
-  if (tier === "free" && monetizationCategory) {
-    prompt += `\nNOTE: User is free tier - limit ${monetizationCategory} response`;
-  }
+  prompt += category ? `\nNOTE: Respond briefly to ${category}.` : "";
 
-  const messages = [
+  return [
     { role: "system", content: prompt },
-    ...history.slice(-3).map(h => ({ role: "user", content: h })),
+    ...userData.history.slice(-3).map(h => ({ role: "user", content: h })),
     { role: "user", content: message }
   ];
-
-  return messages;
 }
 
 async function handleAIRequest(messages, env, tier) {
-  try {
-    const response = await fetch("https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${env.OPENAI_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "gpt-3.5-turbo",
-        messages,
-        temperature: 0.7,
-        max_tokens: tier === "Premium" ? 400 : 200
-      })
-    });
-
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
-    const data = await response.json();
-    return data.choices[0].message.content;
-  } catch (err) {
-    console.error("AI request failed:", err);
-    throw err;
-  }
+  const res = await fetch("https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${env.OPENAI_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "gpt-3.5-turbo",
+      messages,
+      temperature: 0.7,
+      max_tokens: tier === "Premium" ? 400 : 200
+    })
+  });
+  if (!res.ok) throw new Error(`OpenAI API Error: ${res.status}`);
+  const data = await res.json();
+  return data.choices[0].message.content;
 }
 
-function formatResponse(content, userData, monetizationCategory) {
-  let response = { content };
-  
-  if (userData.tier === "free" && monetizationCategory) {
-    const config = MONETIZATION_TRIGGERS[monetizationCategory];
-    response.content = `${config.freeResponse}\n\n${content}`;
-    response.buttons = [{
-      text: config.upsell,
-      url: `/upgrade?category=${monetizationCategory}`
-    }];
+function formatResponse(aiContent, userData, category) {
+  const response = { content: aiContent, buttons: [] };
+  const trigger = MONETIZATION_TRIGGERS[category];
+
+  if (category && ["free", "PAYG"].includes(userData.tier)) {
+    response.content += `\n\n${trigger.freeResponse}`;
+    response.buttons.push({ text: trigger.button, url: trigger.url });
   }
 
-  if (userData.context.isAustralian) {
-    response.content = `[PT] Olá!\n${response.content}`;
-    if (userData.tier !== "Premium") {
-      response.buttons = response.buttons || [];
-      response.buttons.push({
-        text: "Downscale Clinics",
-        url: "https://www.downscale.com.au"
-      });
-    }
+  if (userData.context.isAustralian && userData.tier !== "Premium") {
+    response.buttons.push({ text: "Downscale Clinics", url: "https://www.downscale.com.au" });
   }
 
   return response;
@@ -145,63 +144,33 @@ function formatResponse(content, userData, monetizationCategory) {
 
 export default {
   async fetch(request, env) {
-    // CORS Setup
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type"
     };
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
-    }
-
-    if (request.method !== "POST") {
-      return new Response(JSON.stringify({ error: "Method not allowed" }), {
-        status: 405,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
-    }
+    if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+    if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: corsHeaders });
 
     try {
-      const { message, user_id, context = {} } = await parseJSON(request);
-      if (!message || !user_id) throw new Error("Missing required fields");
+      const { message, user_id } = await parseJSON(request);
+      if (!message || !user_id) throw new Error("Required fields missing.");
 
-      // Get/Create user data
       const userData = await getUserData(user_id, env);
-      const monetizationCategory = detectMonetizationCategory(message);
+      const category = detectTrigger(message);
 
-      // Build and update history
-      const newHistory = [...userData.history.slice(-4), message];
-      await saveUserData(user_id, {
-        ...userData,
-        history: newHistory,
-        context: { ...userData.context, ...context }
-      });
+      userData.history.push(message);
+      await saveUserData(user_id, userData, env);
 
-      // Process with OpenAI
-      const messages = buildPrompt(userData, message);
-      const aiResponse = await handleAIRequest(messages, env);
+      const prompt = buildPrompt(userData, message, category);
+      const aiResponse = await handleAIRequest(prompt, env, userData.tier);
+      const formatted = formatResponse(aiResponse, userData, category);
 
-      // Format final response
-      const formatted = formatResponse(aiResponse, userData, monetizationCategory);
-
-      return new Response(JSON.stringify({
-  response: formatted.content,
-  upgrade_suggested: formatted.buttons && formatted.buttons.length > 0
-}), {
-  headers: { ...corsHeaders, "Content-Type": "application/json" }
-});
-
+      return new Response(JSON.stringify(formatted), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     } catch (err) {
-      console.error("Error:", err);
-      return new Response(JSON.stringify({ 
-        error: "Service unavailable",
-        details: err.message 
-      }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
+      console.error("Worker error:", err);
+      return new Response(JSON.stringify({ error: "Service temporarily unavailable. Please try again later." }), { status: 500, headers: corsHeaders });
     }
   }
 };
