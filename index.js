@@ -92,7 +92,7 @@ function buildPrompt(userData, message) {
   return messages;
 }
 
-async function handleAIRequest(messages, env) {
+async function handleAIRequest(messages, userData, env) {
   try {
     const response = await fetch("https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions", {
       method: "POST",
@@ -104,7 +104,7 @@ async function handleAIRequest(messages, env) {
         model: "gpt-3.5-turbo",
         messages,
         temperature: 0.7,
-        max_tokens: tier === "Premium" ? 400 : 200
+        max_tokens: userData.tier === "Premium" ? 400 : 200 // ✅ FIXED HERE
       })
     });
 
