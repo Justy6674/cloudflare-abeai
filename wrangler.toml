@@ -2,16 +2,21 @@ name = "abeai-proxy"
 main = "index.js"
 compatibility_date = "2024-03-27"
 
+# KV Storage
 kv_namespaces = [
   { binding = "ABEAI_KV", id = "5084daa8615147bab2771668a729620d" }
 ]
 
-# Remove custom_domain and use zone_id instead
+# Routes (FIXED - use your root domain's zone_id)
 routes = [
   { pattern = "api.abeai.health/*", zone_id = "YOUR_ZONE_ID" } # ← Get from Cloudflare DNS
 ]
 
-# Disable build steps
+# Minimal build config (removes all npm errors)
 [build]
+command = "echo 'Skipping build'"
 upload.format = "modules"
-command = "echo 'No build needed'" # ← Bypasses npm errors
+
+# Force monetization triggers
+[vars]
+MONETIZATION_ENABLED = "true"
