@@ -1,28 +1,28 @@
-# PROPERLY FORMATTED ERROR-FREE CONFIG
 name = "abeai-proxy"
 main = "index.js"
 compatibility_date = "2024-03-27"
 
-# KV Storage (original binding)
+# KV Storage
 kv_namespaces = [
   { binding = "ABEAI_KV", id = "5084daa8615147bab2771668a729620d" }
 ]
 
-# Routes (original)
+# Routes (FIXED - no wildcards for custom domains)
 routes = [
-  { pattern = "api.abeai.health/*", custom_domain = true }
+  { pattern = "api.abeai.health", custom_domain = true }
 ]
 
-# Performance limits
-[limits]
-cpu_ms = 5000
-memory = 128
-
+# Simplified build config
 [build]
+command = "npm run build"
 upload.format = "modules"
-upload.main = "./index.js"
 
-# Environment variables (simplified)
+# Environment variables
 [vars]
-ENVIRONMENT = "production"
 MAX_HISTORY_ITEMS = "10"
+OPENAI_MODEL = "gpt-3.5-turbo"
+
+# AI Gateway (correct format)
+[ai]
+binding = "ABEAI_AI"
+account_id = "d9cc7ec108df8e78246e2553ae88c6c2"
