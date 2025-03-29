@@ -186,9 +186,12 @@ export default {
       // Format final response
       const formatted = formatResponse(aiResponse, userData, monetizationCategory);
 
-      return new Response(JSON.stringify(formatted), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
+      return new Response(JSON.stringify({
+  response: formatted.content,
+  upgrade_suggested: formatted.buttons && formatted.buttons.length > 0
+}), {
+  headers: { ...corsHeaders, "Content-Type": "application/json" }
+});
 
     } catch (err) {
       console.error("Error:", err);
