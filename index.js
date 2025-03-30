@@ -1,6 +1,3 @@
-OLD CODE
-// abeai-cloudflare-worker/index.js - OPTIMIZED VERSION
-
 const BASE_PROMPT = `
 You are AbeAI, an empathetic, data-driven health coach. Follow these rules:
 1. For free users: Provide basic advice with upsell prompts
