@@ -34,17 +34,21 @@ export default {
       });
     }
 
-    const { message, user_id, subscription_tier = "free" } = parsed;
-    if (!message || !user_id) {
-      console.log("Missing required fields:", { message, user_id });
-      return new Response(JSON.stringify({ response: "Missing 'message' or 'user_id'" }), {
+    const { message, sessionId, subscription_tier = "free" } = parsed;
+    if (!message) {
+      console.log("Missing required field: message");
+      return new Response(JSON.stringify({ response: "Missing 'message'" }), {
         status: 400,
         headers: corsHeaders
       });
     }
 
+    // Generate sessionId if not provided
+    const userSessionId = sessionId || crypto.randomUUID();
+    console.log("Using sessionId:", userSessionId);
+
     try {
-      console.log("Processing request:", { user_id, messageLength: message.length, tier: subscription_tier });
+      console.log("Processing request:", { sessionId: userSessionId, messageLength: message.length, tier: subscription_tier });
 
       // Validate environment
       if (!env.ABEAI_KV) {
@@ -57,7 +61,7 @@ export default {
       }
 
       // User context from KV
-      const userKey = `user:${user_id}`;
+      const userKey = `user:${userSessionId}`;
       let context = await env.ABEAI_KV.get(userKey, { type: "json" }) || {
         tier: subscription_tier.toLowerCase(),
         responseCount: 0,
@@ -82,7 +86,8 @@ export default {
         return new Response(JSON.stringify({
           response: "I’m so sorry you’re feeling this way. Call Lifeline at 13 11 14 (AU) or talk to someone you trust. You’re not alone.",
           buttons: [],
-          upgradeSuggested: false
+          upgradeSuggested: false,
+          sessionId: userSessionId
         }), { status: 200, headers: corsHeaders });
       }
 
@@ -92,7 +97,8 @@ export default {
         return new Response(JSON.stringify({
           response: "Sorry, I can’t assist minors. Please consult a parent or doctor.",
           buttons: [],
-          upgradeSuggested: false
+          upgradeSuggested: false,
+          sessionId: userSessionId
         }), { status: 200, headers: corsHeaders });
       }
 
@@ -101,7 +107,8 @@ export default {
         return new Response(JSON.stringify({
           response: "That’s unsafe. Please see a doctor for healthy options. You deserve to feel good.",
           buttons: [],
-          upgradeSuggested: false
+          upgradeSuggested: false,
+          sessionId: userSessionId
         }), { status: 200, headers: corsHeaders });
       }
 
@@ -129,7 +136,8 @@ export default {
         return new Response(JSON.stringify({
           response: augmentedReply,
           buttons: [],
-          upgradeSuggested: false
+          upgradeSuggested: false,
+          sessionId: userSessionId
         }), { status: 200, headers: corsHeaders });
       }
 
@@ -146,7 +154,8 @@ export default {
         return new Response(JSON.stringify({
           response: safetyPrompt,
           buttons: [],
-          upgradeSuggested: false
+          upgradeSuggested: false,
+          sessionId: userSessionId
         }), { status: 200, headers: corsHeaders });
       }
 
@@ -166,7 +175,8 @@ export default {
         return new Response(JSON.stringify({
           response: "For teen guidance, upgrade to Premium or consult a pediatrician.",
           buttons,
-          upgradeSuggested: true
+          upgradeSuggested: true,
+          sessionId: userSessionId
         }), { status: 200, headers: corsHeaders });
       }
 
@@ -199,7 +209,8 @@ export default {
         return new Response(JSON.stringify({
           response: triggers[activeTrigger].response,
           buttons,
-          upgradeSuggested: true
+          upgradeSuggested: true,
+          sessionId: userSessionId
         }), { status: 200, headers: corsHeaders });
       }
 
@@ -216,7 +227,8 @@ export default {
         return new Response(JSON.stringify({
           response: "You’ve hit the free limit. Upgrade for more!",
           buttons,
-          upgradeSuggested: true
+          upgradeSuggested: true,
+          sessionId: userSessionId
         }), { status: 200, headers: corsHeaders });
       }
 
@@ -234,14 +246,16 @@ export default {
       return new Response(JSON.stringify({
         response: augmentedReply,
         buttons: [],
-        upgradeSuggested: false
+        upgradeSuggested: false,
+        sessionId: userSessionId
       }), { status: 200, headers: corsHeaders });
 
     } catch (err) {
       console.error("Worker error:", err.message);
       return new Response(JSON.stringify({
         response: "Sorry, I couldn’t process that right now. Please try again.",
-        debug: { error: err.message }
+        debug: { error: err.message },
+        sessionId: userSessionId
       }), { status: 500, headers: corsHeaders });
     }
   }
