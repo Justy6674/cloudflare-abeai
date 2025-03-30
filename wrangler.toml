@@ -6,10 +6,6 @@ kv_namespaces = [
   { binding = "ABEAI_KV", id = "5084daa8615147bab2771668a729620d" }
 ]
 
-# REMOVE ALL ROUTES - we'll handle routing differently
-# Comment out or delete the routes section entirely
-# routes = []
-
 [build]
 command = "echo 'No build needed'"
 upload.format = "modules"
