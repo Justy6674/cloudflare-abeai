@@ -15,4 +15,4 @@ command = "echo 'No build needed'"
 upload.format = "modules"
 
 [vars]
-FORCE_MONETIZATION = "true"
+FORCE_MONETIZATION = "false"
