@@ -1,231 +1,245 @@
 export default {
-  async fetch(request, env) {
-    // 1. Enhanced CORS Configuration
+  async fetch(request, env, ctx) {
+    // Allowed origins for CORS
     const allowedOrigins = [
       "https://abeai.health",
       "https://www.abeai.health",
       "https://abeai-chatbot-webflow-v8ks.vercel.app"
     ];
-    
     const origin = request.headers.get("Origin");
-    const corsHeaders = {
+    const corsBaseHeaders = {
       "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, Origin",
-      "Access-Control-Allow-Credentials": "true",
-      "Vary": "Origin"
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Credentials": "true"
     };
-
-    // Set Access-Control-Allow-Origin if origin is allowed
-    if (origin && allowedOrigins.includes(origin)) {
-      corsHeaders["Access-Control-Allow-Origin"] = origin;
-    } else {
-      return new Response("CORS not allowed", {
-        status: 403,
-        headers: {
-          "Content-Type": "text/plain",
-          ...corsHeaders
-        }
-      });
-    }
-
-    // 2. Handle preflight requests
+    // If origin is allowed, echo it; otherwise, no Access-Control-Allow-Origin header
+    const corsHeaders = origin && allowedOrigins.includes(origin)
+      ? { ...corsBaseHeaders, "Access-Control-Allow-Origin": origin }
+      : corsBaseHeaders;
+    
+    // Handle CORS preflight requests
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: corsHeaders
-      });
-    }
-
-    // 3. Only allow POST requests
-    if (request.method !== "POST") {
-      return new Response("Method Not Allowed", {
-        status: 405,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "text/plain"
+        headers: { 
+          ...corsHeaders, 
+          "Access-Control-Max-Age": "86400"  // cache preflight response for 1 day 
         }
       });
     }
     
+    // Only accept POST for the chatbot interaction
+    if (request.method !== "POST") {
+      return new Response("Method Not Allowed", { status: 405, headers: corsHeaders });
+    }
+    
+    // Parse the request JSON (expected to contain the user's message)
+    let userInput;
     try {
-      // Parse the incoming request JSON
-      let requestData;
-      try {
-        requestData = await request.json();
-      } catch (e) {
-        return new Response(JSON.stringify({ error: "Invalid JSON" }), {
-          status: 400,
-          headers: {
-            ...corsHeaders,
-            "Content-Type": "application/json"
-          }
-        });
-      }
-
-      const userMessage = requestData.message || "";
-      const userPlan = (requestData.plan || "free").toLowerCase();
-      
-      // Session management
-      let sessionId;
-      const cookieHeader = request.headers.get("Cookie") || "";
-      const sessionCookie = cookieHeader.split(";")
-        .map(c => c.trim())
-        .find(c => c.startsWith("sessionId="));
-      
-      if (sessionCookie) {
-        sessionId = sessionCookie.split("=")[1];
-      } else {
-        sessionId = crypto.randomUUID();
-        corsHeaders["Set-Cookie"] = `sessionId=${sessionId}; Path=/; Secure; HttpOnly; SameSite=None`;
-      }
-      
-      // KV storage setup
-      const usageKey = `usage:${sessionId}`;
-      const historyKey = `history:${sessionId}`;
-      let usageCount = 0;
-      
-      // Monetization logic
-      if (userPlan === "free") {
-        const usageVal = await env.ABEAI_KV.get(usageKey);
-        usageCount = parseInt(usageVal) || 0;
-        
-        if (usageCount >= 3) {
-          const country = request.cf?.country || "";
-          const plansList = country === "AU"
-            ? "Pay-As-You-Go, Essentials, Premium, or our Premium + Clinical plan"
-            : "Pay-As-You-Go, Essentials, or Premium plans";
-          
-          return new Response(JSON.stringify({
-            role: "assistant",
-            content: `You've reached the limit of free responses. To continue using AbeAI, please upgrade to one of our ${plansList}.`
-          }), {
-            status: 200,
-            headers: corsHeaders
-          });
-        }
-      }
-      
-      // Conversation history
-      let history = [];
-      try {
-        const historyData = await env.ABEAI_KV.get(historyKey);
-        history = historyData ? JSON.parse(historyData) : [];
-      } catch (e) {
-        console.error("History parse error:", e);
-      }
-
-      // System prompt
-      const systemPrompt = `You are AbeAI, an AI health coach specializing in:
-- Clinical support
-- Nutrition guidance
-- Physical Activity
-- Mental Health
-Use Australian English and maintain a supportive tone.`;
-
-      // Safety checks
-      const lowerMsg = userMessage.toLowerCase();
-      if (/suicide|harm myself|kill myself/.test(lowerMsg)) {
-        return new Response(JSON.stringify({
-          role: "assistant",
-          content: "I'm really sorry you're feeling this way. Please contact Lifeline at 13 11 14 or talk to someone you trust."
-        }), {
-          status: 200,
-          headers: corsHeaders
-        });
-      }
-
-      if (/starve|vomit|purge|eating disorder/.test(lowerMsg)) {
-        return new Response(JSON.stringify({
-          role: "assistant",
-          content: "I'm concerned by this. Please consult a healthcare professional for proper support."
-        }), {
-          status: 200,
-          headers: corsHeaders
-        });
-      }
-      
-      // Prepare messages for OpenAI
-      const messages = [
-        { role: "system", content: systemPrompt },
-        ...history,
-        { role: "user", content: userMessage }
-      ];
-
-      // Set response length by tier
-      const maxTokens = {
-        free: 200,
-        payg: 500,
-        essentials: 800,
-        premium: 1000,
-        clinical: 1000
-      }[userPlan] || 500;
-
-      // OpenAI API Call via Cloudflare Gateway
-      const openaiUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/chat/completions";
-      
-      console.log("Sending to OpenAI:", {
-        model: "gpt-3.5-turbo",
-        messages: messages,
-        max_tokens: maxTokens,
-        temperature: 0.7
+      const data = await request.json();
+      // The user message might be under different keys; support a couple of common ones
+      userInput = (data.message || data.prompt || "").trim();
+    } catch (e) {
+      return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
-
-      const apiResponse = await fetch(openaiUrl, {
+    }
+    if (!userInput) {
+      return new Response(JSON.stringify({ error: "No message provided" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+    
+    // Manage session cookie for user identification
+    let sessionId;
+    const cookieHeader = request.headers.get("Cookie") || "";
+    const cookieMatch = cookieHeader.match(/(?:^|;\s*)session_id=([^;]+)/);
+    if (cookieMatch) {
+      sessionId = cookieMatch[1];
+    }
+    // If no session cookie, generate a new unique ID
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+    }
+    const kvKey = `sess:${sessionId}`;
+    
+    // Retrieve session data from KV, or initialize if not present
+    let sessionData = await env.ABEAI_KV.get(kvKey, { type: "json" });
+    if (!sessionData) {
+      sessionData = {
+        plan: "free",
+        usage: 0,
+        messages: []
+      };
+      // Initialize conversation with a system prompt defining the assistant
+      sessionData.messages.push({
+        role: "system",
+        content: "You are AbeAI, a compassionate and knowledgeable health assistant focused on weight loss and wellness. You provide supportive, evidence-based advice. Answer in a friendly, empathetic, and professional tone."
+      });
+    }
+    
+    // Safety check: detect self-harm or eating disorder crisis content in user input
+    const lowerInput = userInput.toLowerCase();
+    const selfHarmKeywords = ["suicide", "kill myself", "want to die", "don't want to live", "end my life", "hurt myself", "self-harm", "self harm"];
+    const edKeywords = ["anorex", "bulimi", "starve", "vomit", "throw up", "purge", "laxative", "binge"];
+    let safetyTriggered = false;
+    let safetyReply = "";
+    if (selfHarmKeywords.some(term => lowerInput.includes(term))) {
+      safetyTriggered = true;
+      // Craft an empathetic response for self-harm content
+      safetyReply = "I'm really sorry that you're feeling like this. You are not alone, and there are people who care about you. It might help to talk with a mental health professional or someone you trust about how you feel. If you feel like you might harm yourself, please reach out to a crisis line like Lifeline (13 11 14) or seek professional help immediately. You deserve support, and there are people who want to help you.";
+    } else if (edKeywords.some(term => lowerInput.includes(term))) {
+      safetyTriggered = true;
+      // Craft an empathetic response for eating disorder related content
+      safetyReply = "I’m really sorry that you’re going through this. It sounds like you’re struggling with food or how you feel about your body. You’re not alone – many people go through this, and there are professionals who can help. It might be a good idea to reach out to a doctor or counselor to talk about these feelings. You deserve to be healthy and supported. If things feel very hard right now, you could also call the Butterfly Foundation’s Eating Disorder Helpline at 1800 33 4673 (1800 ED HOPE) for support.";
+    }
+    if (safetyTriggered) {
+      // Append the user message and the safety response to the conversation history
+      sessionData.messages.push({ role: "user", content: userInput });
+      const assistantMsg = { role: "assistant", content: safetyReply };
+      sessionData.messages.push(assistantMsg);
+      // Save updated session to KV (not counting toward usage limit)
+      await env.ABEAI_KV.put(kvKey, JSON.stringify(sessionData));
+      // Set session cookie if new
+      const responseHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+      if (!cookieMatch) {
+        // Cookie for 1 year, scoped to the site’s domain for persistence
+        responseHeaders["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000; Domain=.abeai.health`;
+      }
+      // Return the empathetic safety response as the assistant's message
+      return new Response(JSON.stringify(assistantMsg), { status: 200, headers: responseHeaders });
+    }
+    
+    // No safety trigger: proceed with normal AI flow
+    sessionData.messages.push({ role: "user", content: userInput });
+    
+    // Enforce monetization limits if enabled
+    const plan = sessionData.plan || "free";
+    const usageCount = sessionData.usage || 0;
+    const forceMonetization = env.FORCE_MONETIZATION && env.FORCE_MONETIZATION.toString().toLowerCase() === "true";
+    if (forceMonetization && plan === "free" && usageCount >= 3) {
+      // Free user has reached the 3-response limit
+      const upgradeMessage = {
+        role: "assistant",
+        content: "You have reached the limit of free messages. Please upgrade your plan to continue the conversation."
+      };
+      sessionData.messages.push(upgradeMessage);
+      // (Do not increment usage for upgrade prompt; user must upgrade to continue.)
+      await env.ABEAI_KV.put(kvKey, JSON.stringify(sessionData));
+      const responseHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+      if (!cookieMatch) {
+        responseHeaders["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000; Domain=.abeai.health`;
+      }
+      return new Response(JSON.stringify(upgradeMessage), { status: 200, headers: responseHeaders });
+    }
+    
+    // Determine max_tokens based on plan tier for the OpenAI API call
+    const maxTokensMap = {
+      free: 300,
+      payg: 500,
+      essentials: 750,
+      premium: 1000,
+      clinical: 1500
+    };
+    const max_tokens = maxTokensMap[plan] || 500;
+    // Choose model (optionally vary by plan; default to GPT-3.5 for all here)
+    const model = "gpt-3.5-turbo";
+    
+    // Prepare the request payload for OpenAI
+    const apiPayload = {
+      model: model,
+      messages: sessionData.messages,
+      max_tokens: max_tokens
+      // You can add other OpenAI parameters here (temperature, etc.) if needed
+    };
+    
+    let apiResponse;
+    try {
+      // Call the OpenAI Chat Completions API via Cloudflare AI Gateway
+      apiResponse = await fetch("https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${env.OPENAI_KEY}`
         },
-        body: JSON.stringify({
-          model: "gpt-3.5-turbo",
-          messages: messages,
-          max_tokens: maxTokens,
-          temperature: 0.7
-        })
+        body: JSON.stringify(apiPayload)
       });
-
-      if (!apiResponse.ok) {
-        const errorText = await apiResponse.text();
-        console.error("OpenAI Error:", apiResponse.status, errorText);
-        throw new Error(`OpenAI API failed: ${apiResponse.status}`);
-      }
-
-      const responseData = await apiResponse.json();
-      const assistantMessage = responseData.choices?.[0]?.message?.content || "Sorry, I couldn't process that.";
-
-      // Update history
-      history.push(
-        { role: "user", content: userMessage },
-        { role: "assistant", content: assistantMessage }
-      );
-      history = history.slice(-20); // Keep last 10 exchanges
-
-      await env.ABEAI_KV.put(historyKey, JSON.stringify(history));
-      
-      if (userPlan === "free") {
-        await env.ABEAI_KV.put(usageKey, (usageCount + 1).toString());
-      }
-
-      return new Response(JSON.stringify({
-        role: "assistant",
-        content: assistantMessage
-      }), {
-        status: 200,
-        headers: corsHeaders
-      });
-
     } catch (err) {
-      console.error("Worker Error:", err);
-      return new Response(JSON.stringify({
-        error: "Internal server error",
-        details: err.message
-      }), {
-        status: 500,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json"
-        }
-      });
+      // Network or fetch error
+      console.error("OpenAI API fetch error:", err);
+      const errorMsg = {
+        role: "assistant",
+        content: "I'm sorry, I'm having trouble connecting to the AI service right now. Please try again later."
+      };
+      sessionData.messages.push(errorMsg);
+      // (Not counting this as a used response since it's an error case)
+      await env.ABEAI_KV.put(kvKey, JSON.stringify(sessionData));
+      const responseHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+      if (!cookieMatch) {
+        responseHeaders["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000; Domain=.abeai.health`;
+      }
+      return new Response(JSON.stringify(errorMsg), { status: 200, headers: responseHeaders });
     }
+    
+    // Handle HTTP errors from the OpenAI API (e.g., 4xx or 5xx responses)
+    if (!apiResponse.ok) {
+      const status = apiResponse.status;
+      let errorText = "";
+      try {
+        errorText = await apiResponse.text();
+      } catch (_) { /* no body or JSON to parse */ }
+      console.error("OpenAI API returned error:", status, errorText || "<no error text>");
+      let assistantContent;
+      if (status === 400 && errorText.includes("safety system")) {
+        // OpenAI rejected the prompt due to content (policy violation)
+        assistantContent = "I'm sorry, but I cannot assist with that request.";
+      } else {
+        // General API error (rate limit, server error, etc.)
+        assistantContent = "I'm sorry, something went wrong while generating a response. Please try again.";
+      }
+      const errorMsg = { role: "assistant", content: assistantContent };
+      sessionData.messages.push(errorMsg);
+      // (Not incrementing usage due to failure to get a normal answer)
+      await env.ABEAI_KV.put(kvKey, JSON.stringify(sessionData));
+      const responseHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+      if (!cookieMatch) {
+        responseHeaders["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000; Domain=.abeai.health`;
+      }
+      return new Response(JSON.stringify(errorMsg), { status: 200, headers: responseHeaders });
+    }
+    
+    // Parse the successful OpenAI response
+    const result = await apiResponse.json();
+    const assistantMessage = result.choices?.[0]?.message;
+    if (!assistantMessage) {
+      // Unexpected response format or empty result
+      console.error("OpenAI API responded without a message:", JSON.stringify(result));
+      const errorMsg = {
+        role: "assistant",
+        content: "I'm sorry, I couldn't retrieve an answer. Let's try again later."
+      };
+      sessionData.messages.push(errorMsg);
+      // (Not incrementing usage for an empty result scenario)
+      await env.ABEAI_KV.put(kvKey, JSON.stringify(sessionData));
+      const responseHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+      if (!cookieMatch) {
+        responseHeaders["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000; Domain=.abeai.health`;
+      }
+      return new Response(JSON.stringify(errorMsg), { status: 200, headers: responseHeaders });
+    }
+    
+    // Append the assistant's answer to the conversation history and update usage
+    sessionData.messages.push(assistantMessage);
+    sessionData.usage = usageCount + 1;
+    await env.ABEAI_KV.put(kvKey, JSON.stringify(sessionData));
+    
+    // Set cookie if new, and return the assistant's answer
+    const responseHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+    if (!cookieMatch) {
+      responseHeaders["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000; Domain=.abeai.health`;
+    }
+    return new Response(JSON.stringify(assistantMessage), { status: 200, headers: responseHeaders });
   }
-}
+};
