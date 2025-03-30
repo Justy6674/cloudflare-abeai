@@ -11,11 +11,13 @@ export default {
 
     // Handle CORS preflight
     if (request.method === "OPTIONS") {
+      console.log("Handling CORS preflight request");
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
     // Only allow POST
     if (request.method !== "POST") {
+      console.log("Method not allowed:", request.method);
       return new Response(JSON.stringify({ response: "Method not allowed" }), {
         status: 405,
         headers: corsHeaders
@@ -25,6 +27,7 @@ export default {
     // Parse request JSON
     const parsed = await parseJSON(request);
     if (parsed.error) {
+      console.log("Failed to parse JSON:", parsed.message);
       return new Response(JSON.stringify({ response: "Invalid JSON format", debug: parsed.message }), {
         status: 400,
         headers: corsHeaders
@@ -33,6 +36,7 @@ export default {
 
     const { message, user_id, subscription_tier = "free" } = parsed;
     if (!message || !user_id) {
+      console.log("Missing required fields:", { message, user_id });
       return new Response(JSON.stringify({ response: "Missing 'message' or 'user_id'" }), {
         status: 400,
         headers: corsHeaders
@@ -40,11 +44,17 @@ export default {
     }
 
     try {
-      console.log("Request received:", { user_id, messageLength: message.length, tier: subscription_tier });
+      console.log("Processing request:", { user_id, messageLength: message.length, tier: subscription_tier });
 
       // Validate environment
-      if (!env.ABEAI_KV) throw new Error("ABEAI_KV not bound");
-      if (!env.OPENAI_KEY) throw new Error("OPENAI_KEY not set");
+      if (!env.ABEAI_KV) {
+        console.error("ABEAI_KV not bound");
+        throw new Error("ABEAI_KV not bound");
+      }
+      if (!env.OPENAI_KEY) {
+        console.error("OPENAI_KEY not set");
+        throw new Error("OPENAI_KEY not set");
+      }
 
       // User context from KV
       const userKey = `user:${user_id}`;
@@ -58,12 +68,17 @@ export default {
         lastSafetyPrompt: null,
         isAustralian: request.cf?.country === "AU"
       };
+      console.log("Retrieved context from KV:", { userKey, context });
 
-      const saveContext = async () => await env.ABEAI_KV.put(userKey, JSON.stringify(context));
+      const saveContext = async () => {
+        console.log("Saving context to KV:", userKey);
+        await env.ABEAI_KV.put(userKey, JSON.stringify(context));
+      };
       const messageLower = message.toLowerCase();
 
       // Safety Checks
       if (suicideIndicators.some(ind => messageLower.includes(ind))) {
+        console.log("Detected suicide indicators in message:", messageLower);
         return new Response(JSON.stringify({
           response: "I’m so sorry you’re feeling this way. Call Lifeline at 13 11 14 (AU) or talk to someone you trust. You’re not alone.",
           buttons: [],
@@ -73,6 +88,7 @@ export default {
 
       const minorMatch = messageLower.match(/\b(i\s*am|i'm)\s*(\d{1,2})\s*(years?\s*old|y\/?o)\b/);
       if (minorMatch && parseInt(minorMatch[2]) < 18) {
+        console.log("Detected minor:", minorMatch[0]);
         return new Response(JSON.stringify({
           response: "Sorry, I can’t assist minors. Please consult a parent or doctor.",
           buttons: [],
@@ -81,6 +97,7 @@ export default {
       }
 
       if (disorderedIndicators.some(ind => messageLower.includes(ind))) {
+        console.log("Detected disordered eating indicators:", messageLower);
         return new Response(JSON.stringify({
           response: "That’s unsafe. Please see a doctor for healthy options. You deserve to feel good.",
           buttons: [],
@@ -90,6 +107,7 @@ export default {
 
       // Handle Safety Response
       if (context.awaitingSafety) {
+        console.log("Handling safety response for pillar:", context.awaitingSafety);
         const pillar = context.awaitingSafety;
         context.safetyFlags[pillar] = message;
         context.awaitingSafety = null;
@@ -118,6 +136,7 @@ export default {
       // Pillar Detection
       const detectedPillar = detectHealthPillar(messageLower);
       if (detectedPillar && !context.safetyFlags[detectedPillar]) {
+        console.log("Detected pillar requiring safety check:", detectedPillar);
         const safetyPrompt = generateSafetyPrompt(detectedPillar);
         context.awaitingSafety = detectedPillar;
         context.pendingUserQuestion = message;
@@ -136,6 +155,7 @@ export default {
                              messageLower.includes("my teen") || 
                              messageLower.includes("my teenager");
       if (adolescentMatch && context.tier !== "premium" && context.tier !== "clinical") {
+        console.log("Detected adolescent context:", adolescentMatch);
         const buttons = [
           { label: "Upgrade to Premium", url: "https://downscaleai.com/premium" },
           ...(context.isAustralian ? [
@@ -150,7 +170,7 @@ export default {
         }), { status: 200, headers: corsHeaders });
       }
 
-      // Additional Triggers
+      // Additional Triggers (Medication, Diary)
       const triggers = {
         medication: {
           keywords: ["ozempic", "wegovy", "mounjaro", "saxenda", "zepbound", "glp-1", "injection"],
@@ -171,6 +191,7 @@ export default {
         }
       }
       if (activeTrigger && context.tier === "free") {
+        console.log("Detected additional trigger:", activeTrigger);
         const buttons = [
           triggers[activeTrigger].upsell,
           ...(context.isAustralian ? [{ label: "Book Downscale (AU)", url: "https://www.downscale.com.au" }] : [])
@@ -184,6 +205,7 @@ export default {
 
       // Monetization Check
       if (context.tier === "free" && context.responseCount >= 3) {
+        console.log("Free response limit reached:", context.responseCount);
         const buttons = [
           { label: "PAYG", url: "https://downscaleai.com/payg" },
           { label: "Essentials", url: "https://downscaleai.com/essentials" },
@@ -199,8 +221,11 @@ export default {
       }
 
       // AI Request
+      console.log("Building prompt for OpenAI...");
       const messages = buildPrompt(message, context, detectedPillar);
+      console.log("Calling OpenAI...");
       const aiResponse = await handleAIRequest(messages, env);
+      console.log("Received OpenAI response:", aiResponse);
       const augmentedReply = appendDiaryPrompt(aiResponse, detectedPillar, context.tier);
       if (context.tier === "free") context.responseCount += 1;
       context.history.push({ role: "user", content: message }, { role: "assistant", content: aiResponse });
@@ -215,7 +240,7 @@ export default {
     } catch (err) {
       console.error("Worker error:", err.message);
       return new Response(JSON.stringify({
-        response: "Sorry, I’m having trouble. Try again soon.",
+        response: "Sorry, I couldn’t process that right now. Please try again.",
         debug: { error: err.message }
       }), { status: 500, headers: corsHeaders });
     }
@@ -238,7 +263,7 @@ const disorderedIndicators = ["vomit", "purge", "laxative", "starve", "not eat a
 function detectHealthPillar(message) {
   const keywords = {
     clinical: ["medication", "doctor", "clinic", "condition", "insulin", "thyroid", "bariatric", "metabolism"],
-    nutrition: ["diet", "meal", "food", "calorie", "protein", "fasting", "nutrition"],
+    nutrition: ["diet", "meal", "food", "calorie", "protein", "fasting", "nutrition", "snack"],
     activity: ["exercise", "workout", "run", "walk", "yoga", "steps", "gym"],
     mental: ["stress", "anxiety", "depress", "mood", "mental", "sleep", "binge"]
   };
@@ -259,8 +284,8 @@ function generateSafetyPrompt(pillar) {
 }
 
 function buildPrompt(message, context, pillar) {
-  const basePrompt = `You are AbeAI, an Australian weight-loss coach. Use Australian English (e.g., 'fibre', 'metre') and cultural references (e.g., Vegemite, Woolworths) where relevant. Be warm, non-judgmental, and motivational, aligning with Maslow’s hierarchy. Focus on safety and the four pillars: Clinical, Nutrition, Activity, Mental Health. Current pillar: ${pillar || "general"}. Context: Allergies: ${context.safetyFlags?.nutrition || "None"}, Conditions: ${context.safetyFlags?.clinical || "None"}, Injuries: ${context.safetyFlags?.activity || "None"}, Mental Health: ${context.safetyFlags?.mental || "None"}. ${context.tier === "free" ? "Keep it concise." : "Be detailed and personalized."} End with a motivating question or diary prompt.`;
-  const historyBlock = context.history.length > 0 ? `History: ${context.history.map(m => m.content).join("; ")}` : "No previous interactions";
+  const basePrompt = `You are AbeAI, an Australian weight-loss coach. Use Australian English (e.g., 'fibre', 'metre') and cultural references (e.g., Vegemite, Woolworths) where relevant. Be warm, non-judgmental, and motivational, aligning with Maslow’s hierarchy. Focus on safety and the four pillars: Clinical, Nutrition, Activity, Mental Health. Current pillar: ${pillar || "general"}. Context: Allergies: ${context.safetyFlags?.nutrition || "None"}, Conditions: ${context.safetyFlags?.clinical || "None"}, Injuries: ${context.safetyFlags?.activity || "None"}, Mental Health: ${context.safetyFlags?.mental || "None"}. ${context.tier === "free" ? "Keep it concise." : "Be detailed and personalized."} End with a motivating question or diary prompt (e.g., 'Want to log this meal?' for Nutrition).`;
+  const historyBlock = context.history.length > 0 ? `History: ${context.history.map(m => `${m.role}: ${m.content}`).join("; ")}` : "No previous interactions";
 
   return [
     { role: "system", content: `${basePrompt}\n\n${historyBlock}` },
@@ -280,28 +305,42 @@ function appendDiaryPrompt(replyText, pillar, tier) {
 }
 
 async function handleAIRequest(promptMessages, env) {
-  const openaiUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions";
-  const response = await fetch(openaiUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${env.OPENAI_KEY}`
-    },
-    body: JSON.stringify({
+  try {
+    const openaiUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions";
+    console.log("Making OpenAI request to:", openaiUrl);
+    console.log("Request payload:", JSON.stringify({
       model: "gpt-3.5-turbo",
       messages: promptMessages,
       temperature: 0.7,
       max_tokens: promptMessages[0].content.includes("free") ? 200 : 500
-    })
-  });
+    }));
 
-  if (!response.ok) {
-    const errText = await response.text();
-    console.error("OpenAI API error:", response.status, errText);
-    throw new Error(`OpenAI API failed: ${errText}`);
+    const response = await fetch(openaiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${env.OPENAI_KEY}`
+      },
+      body: JSON.stringify({
+        model: "gpt-3.5-turbo",
+        messages: promptMessages,
+        temperature: 0.7,
+        max_tokens: promptMessages[0].content.includes("free") ? 200 : 500
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error("OpenAI API error:", response.status, errText);
+      throw new Error(`OpenAI API failed: ${response.status} - ${errText}`);
+    }
+
+    const data = await response.json();
+    console.log("OpenAI response data:", data);
+    console.log("OpenAI tokens used:", data.usage?.total_tokens);
+    return data.choices?.[0]?.message?.content || "No response generated.";
+  } catch (err) {
+    console.error("Fetch error in handleAIRequest:", err.message);
+    throw err;
   }
-
-  const data = await response.json();
-  console.log("OpenAI tokens used:", data.usage?.total_tokens);
-  return data.choices?.[0]?.message?.content || "No response generated.";
 }
