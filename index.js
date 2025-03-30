@@ -1,25 +1,49 @@
 export default {
   async fetch(request, env) {
-    // Allowed origins for CORS
-    const allowedOrigins = ["https://abeai.health", "https://www.downscaleai.com"];
-    const origin = request.headers.get("Origin");
+     // 1. Enhanced CORS Configuration
+    const allowedOrigins = [
+      "https://abeai.health",
+      "https://www.abeai.health",
+      "https://abeai-chatbot-webflow-v8ks.vercel.app"
+    ];
     
-    // Prepare CORS headers (reflect the request origin if allowed)
-    let corsHeaders = {};
+    const origin = request.headers.get("Origin");
+    const corsHeaders = {
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, Origin",
+      "Access-Control-Allow-Credentials": "true",
+      "Vary": "Origin"
+    };
+
+    // Set Access-Control-Allow-Origin if origin is allowed
     if (origin && allowedOrigins.includes(origin)) {
       corsHeaders["Access-Control-Allow-Origin"] = origin;
-      corsHeaders["Access-Control-Allow-Methods"] = "GET,HEAD,POST,OPTIONS";
-      corsHeaders["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
-      corsHeaders["Access-Control-Allow-Credentials"] = "true";
+    } else {
+      return new Response("CORS not allowed", {
+        status: 403,
+        headers: {
+          "Content-Type": "text/plain"
+        }
+      });
     }
-    
-    // Handle preflight (OPTIONS) requests for CORS
+
+    // 2. Handle preflight requests
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders });
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders
+      });
     }
-    // Only allow our intended methods (POST for chatbot queries)
+
+    // 3. Only allow POST requests
     if (request.method !== "POST") {
-      return new Response("Method Not Allowed", { status: 405, headers: corsHeaders });
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/plain"
+        }
+      });
     }
     
     try {
