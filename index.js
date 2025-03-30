@@ -1,224 +1,76 @@
-// Guard to prevent multiple script executions
-if (window.abeaiInitialized) {
-  console.log("🟡 AbeAI already initialized, skipping...");
-} else {
-  window.abeaiInitialized = true;
-  console.log("🟢 AbeAI Chatbot initializing (Version: 1.1.1)");
-
-  // Configuration - unchanged from original
-  const CONFIG = {
-    proxyUrl: "https://abeai-proxy.downscaleweightloss.workers.dev",
-    logoUrl: "https://abeai-chatbot-webflow-y8ks.vercel.app/abeailogo.png",
-    colors: {
-      primary: "#5271ff",
-      secondary: "#b68a71",
-      background: "#f7f2d3",
-      text: "#666d70",
-      darkText: "#333333"
-    }
-  };
-
-  // User ID management only
-  const userId = localStorage.getItem("abeai_user_id") || crypto.randomUUID();
-  localStorage.setItem("abeai_user_id", userId);
-
-  // Create chatbot UI - identical to original
-  function createChatbotUI() {
-    if (document.getElementById("abeai-container")) return;
-
-    const chatbotContainer = document.createElement("div");
-    chatbotContainer.id = "abeai-container";
-    chatbotContainer.innerHTML = `
-      <div id="chat-container" class="abeai-chatbox">
-        <div id="chat-header" class="abeai-header">
-          <div class="abeai-brand">
-            <img src="${CONFIG.logoUrl}" class="abeai-logo" alt="AbeAI Logo" />
-            <span class="abeai-title"><span class="abeai-highlight">AbeAI</span> Health Coach</span>
-          </div>
-          <div id="chat-toggle" class="abeai-toggle">−</div>
-        </div>
-        <div id="chat-messages" class="abeai-messages"></div>
-        <div id="predefined-selections" class="abeai-quick-options">
-          <div id="predefined-options" class="abeai-options-grid"></div>
-        </div>
-        <div id="chat-input-area" class="abeai-input-area">
-          <input type="text" id="chat-input" class="abeai-input" placeholder="Ask AbeAI or select..." />
-          <button id="send-btn" class="abeai-send-btn">Send</button>
-        </div>
-      </div>
-      <div id="chat-minimized" class="abeai-minimized">
-        <div class="abeai-bubble-hint">Chat with AbeAI</div>
-        <div class="abeai-bubble">
-          <img src="${CONFIG.logoUrl}" class="abeai-bubble-logo" alt="AbeAI" />
-        </div>
-        <div class="abeai-bubble-prompt">Press Here</div>
-      </div>
-    `;
-
-    // Keep original CSS exactly the same
-    const styleTag = document.createElement("style");
-    styleTag.id = "abeai-styles";
-    styleTag.textContent = `
-      /* [Previous CSS content EXACTLY as in original, no changes] */
-      /* ... all original CSS rules preserved ... */
-    `;
-
-    document.body.appendChild(chatbotContainer);
-    document.head.appendChild(styleTag);
-  }
-
-  // Display message - unchanged from original format
-  function displayMessage(content, isUser = false) {
-    const chatMessages = document.getElementById('chat-messages');
-    const messageElement = document.createElement("div");
-    messageElement.className = `abeai-message ${isUser ? 'abeai-user' : 'abeai-bot'}`;
-    messageElement.innerHTML = isUser 
-      ? `<div class="abeai-message-content">${content}</div>`
-      : `
-        <img src="${CONFIG.logoUrl}" class="abeai-avatar" alt="AbeAI Logo" />
-        <div class="abeai-message-content">${content}</div>
-      `;
-    chatMessages.appendChild(messageElement);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
-
-  // Show loading indicator - unchanged
-  function showLoading() {
-    const chatMessages = document.getElementById('chat-messages');
-    const loadingElement = document.createElement("div");
-    loadingElement.className = "abeai-message loading";
-    loadingElement.innerHTML = `
-      <img src="${CONFIG.logoUrl}" class="abeai-avatar" alt="AbeAI Logo" />
-      <div class="abeai-typing-indicator"><span></span><span></span><span></span></div>
-    `;
-    chatMessages.appendChild(loadingElement);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-    return loadingElement;
-  }
-
-  // Send message to backend - optimized but preserves functionality
-  async function sendMessage(message) {
-    const loadingElement = showLoading();
-    
+export default {
+  async fetch(request, env) {
     try {
-      const response = await fetch(CONFIG.proxyUrl, {
+      const { message, user_id } = await request.json();
+
+      if (!message || !user_id) {
+        return new Response(JSON.stringify({ response: "Invalid request." }), { status: 400 });
+      }
+
+      // Get user context (allergies/intolerances) from Cloudflare KV
+      let userContext = await env.ABEAI_KV.get(user_id, { type: "json" });
+      if (!userContext) {
+        userContext = { allergies: [], intolerances: [], allergiesAsked: false };
+        await env.ABEAI_KV.put(user_id, JSON.stringify(userContext));
+      }
+
+      let systemPrompt = `You are AbeAI, an empathetic, Australian-focused health coach. Follow these guidelines strictly:
+      1. Provide brief, empathetic responses.
+      2. Use Australian spelling and cultural references.
+      3. Adjust responses based on fitness level: beginner.
+      4. End each response with a clear and engaging follow-up question.
+      `;
+
+      // Ask about allergies/intolerances if relevant & not yet asked
+      if (!userContext.allergiesAsked && /snack|meal|food|eat|protein|nutrition/i.test(message)) {
+        userContext.allergiesAsked = true;
+        await env.ABEAI_KV.put(user_id, JSON.stringify(userContext));
+
+        return new Response(JSON.stringify({
+          response: "Before I provide suggestions, could you tell me if you have any food allergies or intolerances?"
+        }), { headers: { "Content-Type": "application/json" } });
+      }
+
+      // Include allergy/intolerance info if available
+      const allergyInfo = userContext.allergies.length || userContext.intolerances.length
+        ? `The user has allergies: ${userContext.allergies.join(", ")}, intolerances: ${userContext.intolerances.join(", ")}. Tailor responses accordingly.`
+        : "The user has no known allergies or intolerances.";
+
+      systemPrompt += allergyInfo;
+
+      // Call OpenAI API
+      const openAIResponse = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Authorization": `Bearer ${env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify({
-          message,
-          user_id: userId
+          model: "gpt-3.5-turbo-0125",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: message }
+          ],
+          temperature: 0.7
         })
       });
 
-      const data = await response.json();
-      loadingElement.remove();
-      
-      if (data.error) throw new Error(data.error);
-      
-      displayMessage(data.content);
-      if (data.buttons) {
-        data.buttons.forEach(button => {
-          const btn = document.createElement("button");
-          btn.className = "abeai-upgrade-btn";
-          btn.textContent = button.text;
-          btn.onclick = () => window.open(button.url, "_blank");
-          document.getElementById('chat-messages').appendChild(btn);
-        });
+      if (!openAIResponse.ok) {
+        throw new Error(`OpenAI Error: ${openAIResponse.statusText}`);
       }
-    } catch (error) {
-      loadingElement.remove();
-      displayMessage("Sorry, I couldn't process that right now. Please try again.");
-      console.error("Error:", error);
+
+      const openAIData = await openAIResponse.json();
+      const aiMessage = openAIData.choices[0].message.content.trim();
+
+      return new Response(JSON.stringify({
+        response: aiMessage
+      }), { headers: { "Content-Type": "application/json" } });
+
+    } catch (err) {
+      console.error("Backend Error:", err.message);
+      return new Response(JSON.stringify({
+        response: "Sorry, something went wrong. Please try again."
+      }), { headers: { "Content-Type": "application/json" }, status: 500 });
     }
   }
-
-  // Initialize chatbot with all original UI elements
-  function initializeChatbot() {
-    createChatbotUI();
-
-    // Original DOM references
-    const chatContainer = document.getElementById('chat-container');
-    const chatMinimized = document.getElementById('chat-minimized');
-    const chatToggle = document.getElementById('chat-toggle');
-    const predefinedSelections = document.getElementById('predefined-selections');
-    const predefinedOptions = document.getElementById('predefined-options');
-    const chatMessages = document.getElementById('chat-messages');
-    const sendBtn = document.getElementById('send-btn');
-    const chatInput = document.getElementById('chat-input');
-
-    // Original toggle behavior
-    const isMobile = window.innerWidth <= 768;
-    let isExpanded = !isMobile;
-    chatContainer.style.display = isExpanded ? 'flex' : 'none';
-    chatMinimized.style.display = isExpanded ? 'none' : 'flex';
-
-    chatToggle.onclick = () => {
-      isExpanded = !isExpanded;
-      chatContainer.style.display = isExpanded ? 'flex' : 'none';
-      chatMinimized.style.display = isExpanded ? 'none' : 'flex';
-      chatToggle.textContent = isExpanded ? '−' : '+';
-    };
-
-    chatMinimized.onclick = () => {
-      isExpanded = true;
-      chatContainer.style.display = 'flex';
-      chatMinimized.style.display = 'none';
-      chatToggle.textContent = '−';
-    };
-
-    // Original predefined messages
-    const predefinedMessages = [
-      "Can you analyse my BMI?",
-      "How many calories should I eat daily to lose weight?",
-      "Give me 20 high-protein snack ideas",
-      "Create a kid-friendly lunchbox meal plan",
-      "Suggest a simple home workout routine"
-    ];
-
-    // Add predefined options exactly as in original
-    predefinedMessages.forEach((msg) => {
-      const button = document.createElement("button");
-      button.textContent = msg;
-      button.onclick = async () => {
-        displayMessage(msg, true);
-        predefinedSelections.style.display = 'none';
-        await sendMessage(msg);
-      };
-      predefinedOptions.appendChild(button);
-    });
-
-    // Original message submission
-    const handleSubmit = async () => {
-      const message = chatInput.value.trim();
-      if (!message) return;
-      
-      chatInput.value = '';
-      displayMessage(message, true);
-      predefinedSelections.style.display = 'none';
-      await sendMessage(message);
-    };
-
-    sendBtn.onclick = handleSubmit;
-    chatInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') handleSubmit();
-    });
-
-    // Original welcome flow
-    setTimeout(() => {
-      if (document.getElementById("chat-input")) {
-        sendMessage("welcome");
-      }
-    }, 1000);
-  }
-
-  // Original initialization
-  if (document.readyState === "complete" || document.readyState === "interactive") {
-    initializeChatbot();
-  } else {
-    document.addEventListener("DOMContentLoaded", initializeChatbot);
-  }
-
-  window.addEventListener('beforeunload', () => {
-    window.abeaiInitialized = false;
-  });
-}
+};
