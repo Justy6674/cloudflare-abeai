@@ -375,7 +375,7 @@ What area would you like to explore today? Whether you're looking to understand 
     const gatewayBaseUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai";
     
     // CORRECT: Append the specific endpoint path to the base URL
-    const apiUrl = `${gatewayBaseUrl}/v1/chat/completions`;
+    const apiUrl = `${gatewayBaseUrl}/chat/completions`;
     
     // Log the full URL being used
     console.log("Using API URL:", apiUrl);
