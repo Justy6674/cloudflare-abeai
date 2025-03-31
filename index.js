@@ -6,6 +6,8 @@ export default {
       "https://abeai.health",
       "https://www.downscale.com.au",
       "https://downscale.com.au",
+      https://api.abeai.health",  
+      "http://api.abeai.health",   
       "http://localhost:3000",
       // Add your Webflow domain here if not already included
       "https://downscaleweightloss.webflow.io"
