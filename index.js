@@ -1,12 +1,25 @@
 export default {
   async fetch(request, env, ctx) {
+    // Enhanced Welcome Message
+    const WELCOME_MESSAGE = `G'day! I'm AbeAI, your personalized health companion. 
+
+I'm here to support your wellness journey across four key areas:
+🩺 Clinical Health
+🥗 Nutrition Guidance
+🏋️ Activity & Fitness
+🧠 Mental Wellbeing
+
+What area would you like to explore today? Whether you're looking to understand your health metrics, plan nutritious meals, find enjoyable ways to stay active, or boost your mental resilience – I'm here to help, without judgment.
+
+Quick tip: Keeping a daily diary can be a powerful tool in tracking your progress. Would you like to learn more about our smart tracking features?`;
+
     // Define allowed origins for CORS (update with your actual Webflow domain)
     const allowedOrigins = [
       "https://www.abeai.health",
       "https://abeai.health",
       "https://www.downscale.com.au",
       "https://downscale.com.au",
-      https://api.abeai.health",  
+      "https://api.abeai.health",  
       "http://api.abeai.health",   
       "http://localhost:3000",
       // Add your Webflow domain here if not already included
@@ -24,7 +37,7 @@ export default {
       corsHeaders["Access-Control-Allow-Origin"] = origin;
     } else if (origin) {
       // If origin is not in the list, you can log this for debugging
-      console.log(`Unauthorized origin: ${origin}`);
+      console.log(`🚫 Unauthorized origin attempt: ${origin}`);
       return new Response("Unauthorized origin", { status: 401 });
     } else {
       // No Origin (e.g., server-to-server request)
@@ -73,6 +86,22 @@ export default {
     let userMessage = body.message || body.prompt || "";
     const userId = body.user_id || null;
     
+    // Special Handling for Welcome Message
+    if (userMessage.toLowerCase() === "welcome" || !userMessage) {
+      const welcomeResponse = {
+        message: WELCOME_MESSAGE,
+        sessionId: userId || crypto.randomUUID(),
+        pillar: "mental"
+      };
+
+      console.log(`🎉 Welcome message triggered`);
+
+      return new Response(
+        JSON.stringify(welcomeResponse),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
     if (typeof userMessage !== "string" || userMessage.trim() === "") {
       return new Response(
         JSON.stringify({ error: "No user message provided" }),
@@ -112,9 +141,9 @@ export default {
         const stored = await env["abeai-kv"].get(kvKey);
         if (stored) {
           sessionData = JSON.parse(stored);
-          console.log(`Loaded session data for ${sessionId}`);
+          console.log(`🔍 Loaded session data for ${sessionId}`);
         } else {
-          console.log(`No existing session found for ID: ${sessionId}`);
+          console.log(`📝 No existing session found for ID: ${sessionId}`);
         }
       }
     } catch (e) {
@@ -131,7 +160,7 @@ export default {
         minor: false,
         offeredDiary: { clinical: false, nutrition: false, activity: false, mental: false }
       };
-      console.log("Created new session data");
+      console.log("📦 Created new session data");
     }
 
     // Update age/minor status if provided in request
@@ -151,11 +180,14 @@ export default {
       sessionData.tier = body.tier.toLowerCase();
     }
     
-    // Determine premium status
-    const isPremium = sessionData.tier === "premium" || 
-                     sessionData.tier === "clinical" || 
-                     sessionData.tier === "premium+clinical" ||
-                     sessionData.tier === "essentials";
+    // Determine premium status with expanded tier recognition
+    const isPremium = [
+      "premium", 
+      "clinical", 
+      "premium+clinical", 
+      "essentials", 
+      "payg"
+    ].includes(sessionData.tier.toLowerCase());
 
     // Check for safety triggers in the user message
     const lowerMsg = userMessage.toLowerCase();
@@ -197,10 +229,9 @@ export default {
         headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
       }
       
-      // CORRECTED: Changed 'content' to 'message' to match frontend expectations
       return new Response(
         JSON.stringify({ 
-          message: safeResponse,  // Changed from 'content' to 'message'
+          message: safeResponse,
           sessionId: sessionId
         }),
         { status: 200, headers }
@@ -208,10 +239,10 @@ export default {
     }
 
     // Check for monetization triggers based on usage and tier
-    const FREE_LIMIT = 5;
+    const FREE_RESPONSE_LIMIT = 3; // Aligned with business plan
     
     // Check if we should monetize based on usage limit
-    const shouldMonetize = !isPremium && sessionData.usage >= FREE_LIMIT;
+    const shouldMonetize = !isPremium && sessionData.usage >= FREE_RESPONSE_LIMIT;
     
     // Additional monetization logic based on pillar detection
     let pillar = "mental";
@@ -232,7 +263,35 @@ export default {
     
     if (shouldMonetize) {
       // User has reached free limit - provide upsell message
-      const upsellMessage = `You've reached the limit of free queries. To continue getting personalized ${pillar} advice and unlock all features, please consider upgrading to our Premium plan.`;
+      const upsellMessage = `You've reached the limit of free queries in the ${pillar} domain. To continue getting personalized advice and unlock all features, please explore our subscription options.`;
+      
+      // Prepare upgrade options
+      const upgradeOptions = [
+        { 
+          name: "PAYG", 
+          description: "Pay-as-you-go flexible support", 
+          url: "https://downscaleai.com/payg" 
+        },
+        { 
+          name: "Essentials", 
+          description: "Comprehensive wellness tracking", 
+          url: "https://downscaleai.com/essentials" 
+        },
+        { 
+          name: "Premium", 
+          description: "Advanced personalized coaching", 
+          url: "https://downscaleai.com/premium" 
+        }
+      ];
+
+      // Add Australian Clinical option if user is in Australia
+      if (request.cf && request.cf.country && request.cf.country.toUpperCase() === "AU") {
+        upgradeOptions.push({
+          name: "Clinical", 
+          description: "Medical-grade weight management", 
+          url: "https://www.downscale.com.au"
+        });
+      }
       
       // Log interaction
       sessionData.messages.push({ role: "user", content: userMessage });
@@ -251,12 +310,13 @@ export default {
         headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
       }
       
-      // CORRECTED: Changed 'content' to 'message' to match frontend expectations
       return new Response(
         JSON.stringify({ 
-          message: upsellMessage,  // Changed from 'content' to 'message'
+          message: upsellMessage,
           sessionId: sessionId,
-          monetize: true
+          monetize: true,
+          pillar: pillar,
+          upgradeOptions: upgradeOptions
         }),
         { status: 200, headers }
       );
