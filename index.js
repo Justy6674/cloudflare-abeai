@@ -195,10 +195,10 @@ export default {
         headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
       }
       
+      // CORRECTED: Changed 'content' to 'message' to match frontend expectations
       return new Response(
         JSON.stringify({ 
-          role: "assistant", 
-          content: safeResponse,
+          message: safeResponse,  // Changed from 'content' to 'message'
           sessionId: sessionId
         }),
         { status: 200, headers }
@@ -249,10 +249,10 @@ export default {
         headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
       }
       
+      // CORRECTED: Changed 'content' to 'message' to match frontend expectations
       return new Response(
         JSON.stringify({ 
-          role: "assistant", 
-          content: upsellMessage,
+          message: upsellMessage,  // Changed from 'content' to 'message'
           sessionId: sessionId,
           monetize: true
         }),
@@ -309,9 +309,16 @@ export default {
       max_tokens: isPremium ? 2000 : 1000
     };
     
-    // Always use the AI Gateway URL
-    const apiUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions";
-      
+    // CORRECT: Use the proper base gateway URL
+    const gatewayBaseUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai";
+    
+    // CORRECT: Append the specific endpoint path to the base URL
+    const apiUrl = `${gatewayBaseUrl}/v1/chat/completions`;
+    
+    // Log the full URL being used
+    console.log("Using API URL:", apiUrl);
+    
+    // Headers for Cloudflare AI Gateway
     const apiHeaders = {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${env.OPENAI_KEY}`
@@ -453,10 +460,9 @@ export default {
       console.log("Error saving final session data:", e);
     }
 
-    // Build the response object
-    const responseBody = { 
-      role: "assistant", 
-      content: assistantMessage,
+    // CORRECTED FINAL RESPONSE: Changed 'content' to 'message' to match frontend expectations
+    const responseBody = {
+      message: assistantMessage,  // Changed from 'content' to 'message'
       sessionId: sessionId,
       usage: sessionData.usage,
       pillar: pillar,
@@ -474,4 +480,4 @@ export default {
       { status: 200, headers: responseHeaders }
     );
   }
-};
+}
