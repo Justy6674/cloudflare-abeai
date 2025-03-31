@@ -1,7 +1,7 @@
 export default {
   async fetch(request, env, ctx) {
     // Enhanced Welcome Message
-    const WELCOME_MESSAGE = `G'day! I'm AbeAI, your personalized health companion. 
+    const WELCOME_MESSAGE = `Hi, I'm AbeAI, your personalised health companion. 
 
 I'm here to support your wellness journey across four key areas:
 🩺 Clinical Health
