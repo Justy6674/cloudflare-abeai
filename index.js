@@ -1,148 +1,151 @@
+const SYSTEM_MESSAGE = "You are AbeAI, a compassionate and knowledgeable health assistant focused on weight loss and wellness. You provide supportive, evidence-based advice. Answer in a friendly, empathetic, and professional tone.";
+
 export default {
-  async fetch(request, env, ctx) {
-    const allowedOrigins = [
-      "https://abeai.health",
-      "https://www.abeai.health",
-      "https://abeai-chatbot-webflow-y8ks.vercel.app",
-      "https://downscaleai.com"
-    ];
-    const origin = request.headers.get("Origin");
-    const corsHeaders = {};
-    if (origin && allowedOrigins.includes(origin)) {
-      corsHeaders["Access-Control-Allow-Origin"] = origin;
-      corsHeaders["Access-Control-Allow-Methods"] = "GET,HEAD,POST,OPTIONS";
-      corsHeaders["Access-Control-Allow-Headers"] = "Content-Type";
-      corsHeaders["Access-Control-Allow-Credentials"] = "true";
-      corsHeaders["Access-Control-Max-Age"] = "86400";
-      corsHeaders["Vary"] = "Origin";
-    }
-
+  async fetch(request, env) {
+    // Handle CORS preflight
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders });
-    }
-
-    if (request.method === "GET" || request.method === "HEAD") {
-      const headers = { "Content-Type": "application/json", ...corsHeaders };
-      if (request.method === "HEAD") {
-        return new Response(null, { status: 200, headers });
-      }
-      return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers });
-    }
-
-    if (request.method !== "POST") {
-      return new Response(JSON.stringify({ error: "Method Not Allowed" }), {
-        status: 405,
-        headers: { "Content-Type": "application/json", ...corsHeaders }
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        }
       });
     }
 
+    // Only allow POST for the chatbot request
+    if (request.method !== "POST") {
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
+
+    let sessionId = null;
+    let userMessage = null;
     try {
-      const contentType = request.headers.get("Content-Type") || "";
-      if (!contentType.includes("application/json")) {
-        return new Response(JSON.stringify({ error: "Invalid request format: expected JSON" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json", ...corsHeaders }
-        });
-      }
-
-      const reqData = await request.json();
-      const userMessage = reqData.message?.trim();
-      if (!userMessage) {
-        return new Response(JSON.stringify({ error: "Missing 'message' in request body" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json", ...corsHeaders }
-        });
-      }
-
-      let sessionId;
-      let newSession = false;
-      const cookieHeader = request.headers.get("Cookie") || "";
-      if (cookieHeader) {
-        const cookies = cookieHeader.split(";").map(c => c.trim().split("="));
-        for (const [name, value] of cookies) {
-          if (name === "ABEAI_SESSION") {
-            sessionId = value;
-            break;
-          }
+      const data = await request.json();
+      userMessage = data.message;
+      sessionId = data.sessionId || null;
+    } catch (err) {
+      // If parsing JSON fails, return 400 Bad Request
+      return new Response(JSON.stringify({ error: "Invalid JSON payload" }), {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
         }
+      });
+    }
+
+    // Initialize or retrieve the conversation array from KV
+    let conversation = [];
+    if (sessionId) {
+      const storedData = await env.abeai_kv.get(sessionId, { type: "json" });
+      if (storedData && storedData.messages) {
+        conversation = storedData.messages;  // retrieve existing conversation
+      } else if (Array.isArray(storedData)) {
+        conversation = storedData;  // (in case it was stored as an array directly)
       }
+    }
+    if (conversation.length === 0) {
+      // New session: start a new conversation with the system prompt
+      conversation.push({ role: "system", content: SYSTEM_MESSAGE });
       if (!sessionId) {
-        sessionId = crypto.randomUUID();
-        newSession = true;
+        sessionId = crypto.randomUUID();  // create a new session ID if one was not provided
       }
+    }
 
-      let sessionData = { messages: [], usageCount: 0 };
-      const kvKey = `session:${sessionId}`;
-      if (!newSession) {
-        const stored = await env.ABEAI_KV.get(kvKey);
-        if (stored) {
-          sessionData = JSON.parse(stored);
-        }
-      }
+    // Append the latest user message to the conversation
+    conversation.push({ role: "user", content: userMessage });
 
-      const freeLimit = 5;
-      if (sessionData.usageCount >= freeLimit && !env.FORCE_MONETIZATION) {
-        return new Response(JSON.stringify({
-          message: "You've reached your free usage limit. Please consider upgrading.",
-          upgradeSuggested: true
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json", ...corsHeaders }
-        });
-      }
+    // Prepare the OpenAI API request (Chat Completion)
+    const openAIEndpoint = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/chat/completions";
+    const requestBody = {
+      model: "gpt-3.5-turbo",
+      messages: conversation
+    };
 
-      const messagesForApi = sessionData.messages.slice(-9);
-      messagesForApi.push({ role: "user", content: userMessage });
-
-      const apiUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/chat/completions";
-
-      const apiResponse = await fetch(apiUrl, {
+    let openAIResponse;
+    try {
+      openAIResponse = await fetch(openAIEndpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${env.OPENAI_KEY}`
+          "Authorization": `Bearer ${env.OPENAI_KEY}`  // include OpenAI API key from secret
         },
-        body: JSON.stringify({
-          model: "gpt-4",
-          messages: messagesForApi,
-          temperature: 0.7
-        })
+        body: JSON.stringify(requestBody)
       });
-
-      if (!apiResponse.ok) {
-        const errText = await apiResponse.text();
-        return new Response(JSON.stringify({
-          error: "Upstream AI request failed",
-          status: apiResponse.status,
-          details: errText.slice(0, 200)
-        }), {
-          status: apiResponse.status,
-          headers: { "Content-Type": "application/json", ...corsHeaders }
-        });
-      }
-
-      const completion = await apiResponse.json();
-      const assistantReply = completion.choices[0].message.content;
-
-      sessionData.messages.push({ role: "user", content: userMessage });
-      sessionData.messages.push({ role: "assistant", content: assistantReply });
-      sessionData.usageCount += 1;
-
-      await env.ABEAI_KV.put(kvKey, JSON.stringify(sessionData));
-
-      const responseBody = { message: assistantReply, sessionId };
-      const responseHeaders = { "Content-Type": "application/json", ...corsHeaders };
-      if (newSession) {
-        responseHeaders["Set-Cookie"] = `ABEAI_SESSION=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
-      }
-
-      return new Response(JSON.stringify(responseBody), { status: 200, headers: responseHeaders });
-
     } catch (err) {
-      return new Response(JSON.stringify({ error: "Internal Server Error", message: err.message }), {
+      // Network error or other fetch failure
+      return new Response(JSON.stringify({ error: "Failed to fetch OpenAI API" }), {
         status: 500,
-        headers: { "Content-Type": "application/json", ...corsHeaders }
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
       });
     }
+
+    // Handle non-200 responses from OpenAI (e.g., Unauthorized or other errors)
+    if (!openAIResponse.ok) {
+      const status = openAIResponse.status;
+      let errorMsg = openAIResponse.statusText || "API Error";
+      try {
+        const errorData = await openAIResponse.json();
+        // Extract a meaningful error message if available
+        if (errorData.error) {
+          errorMsg = (typeof errorData.error === "string")
+            ? errorData.error 
+            : errorData.error.message || errorMsg;
+        }
+      } catch (_) {
+        // If response isn’t JSON or parsing fails, use status text
+      }
+      return new Response(JSON.stringify({ error: errorMsg }), {
+        status: status,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
+
+    // Parse the successful response from OpenAI
+    const resultData = await openAIResponse.json();
+    const assistantReply = resultData.choices?.[0]?.message?.content || "";
+    if (!assistantReply) {
+      // If we didn't get a valid assistant message, return an error
+      return new Response(JSON.stringify({ error: "No reply from model" }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
+
+    // Append assistant reply to the conversation and persist to KV
+    conversation.push({ role: "assistant", content: assistantReply });
+    try {
+      await env.abeai_kv.put(sessionId, JSON.stringify({ messages: conversation }));
+    } catch (err) {
+      // Log or handle KV write error (non-critical for immediate response)
+      console.warn("KV write failed:", err);
+    }
+
+    // Send back the assistant’s reply (and the sessionId for reference)
+    const responsePayload = { reply: assistantReply, sessionId: sessionId };
+    return new Response(JSON.stringify(responsePayload), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*"
+      }
+    });
   }
 };
