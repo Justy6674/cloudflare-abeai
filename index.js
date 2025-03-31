@@ -309,12 +309,8 @@ export default {
       max_tokens: isPremium ? 2000 : 1000
     };
     
-    // Check if we're using the AI Gateway or direct OpenAI
-    const useGateway = env.USE_AI_GATEWAY === "true";
-    
-    const apiUrl = useGateway 
-      ? "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions"
-      : "https://api.openai.com/v1/chat/completions";
+    // Always use the AI Gateway URL
+    const apiUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai/v1/chat/completions";
       
     const apiHeaders = {
       "Content-Type": "application/json",
@@ -329,7 +325,7 @@ export default {
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        console.log(`Attempt ${attempt} to call OpenAI API`);
+        console.log(`Attempt ${attempt} to call OpenAI API via AI Gateway`);
         aiResponse = await fetch(apiUrl, {
           method: "POST",
           headers: apiHeaders,
