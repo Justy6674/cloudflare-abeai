@@ -11,7 +11,7 @@ I'm here to support your wellness journey across four key areas:
 
 What area would you like to explore today? Whether you're looking to understand your health metrics, plan nutritious meals, find enjoyable ways to stay active, or boost your mental resilience – I'm here to help, without judgment.
 
-Quick tip: Keeping a daily diary can be a powerful tool in tracking your progress. Would you like to learn more about our smart tracking features?`;
+
 
     // Define allowed origins for CORS (update with your actual Webflow domain)
     const allowedOrigins = [
