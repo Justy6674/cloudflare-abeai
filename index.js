@@ -1,9 +1,16 @@
-// Helper functions added above the main handler as specified
 // Parses raw user message into structured safety information
 function parseSafetyInfo(userMessage) {
   const safetyInfo = { nutrition: "", activity: "", clinical: "" };
 
   const lowerMsg = userMessage.toLowerCase();
+
+  // Handle "NO" or empty responses explicitly
+  if (lowerMsg === "no" || lowerMsg.trim() === "") {
+    safetyInfo.nutrition = "None";
+    safetyInfo.activity = "None";
+    safetyInfo.clinical = "None";
+    return safetyInfo;
+  }
 
   const nutritionKeywords = ["nut", "dairy", "gluten", "shellfish", "soy", "egg", "fish"];
   const activityKeywords = ["injury", "knee", "back", "joint", "limitation", "pain"];
@@ -213,17 +220,18 @@ What area would you like to explore today?`;
         tier: body.tier || "free",
         minor: false,
         offeredDiary: { clinical: false, nutrition: false, activity: false, mental: false },
-        // Added safetyInfo and awaitingSafetyInfo as per ChatGPT instructions
         safetyInfo: null,
-        awaitingSafetyInfo: false
+        awaitingSafetyInfo: false,
+        pendingQuery: null // Added to store the initial user query
       };
       console.log("📦 Created new session data");
     }
 
-    // Modified session initiation logic as per ChatGPT Step 1
+    // Updated session initiation logic as per ChatGPT's suggestions
     if (!sessionData.safetyInfo) {
       if (!sessionData.awaitingSafetyInfo) {
         sessionData.awaitingSafetyInfo = true;
+        sessionData.pendingQuery = userMessage; // Store initial user query
 
         const safetyPrompt = `
 Before we start, I'd like to ensure your safety and personalize your experience. Could you please let me know if you have:
@@ -234,7 +242,6 @@ Before we start, I'd like to ensure your safety and personalize your experience.
         `;
 
         sessionData.messages.push({ role: "assistant", content: safetyPrompt });
-
         await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
 
         const headers = { ...corsHeaders, "Content-Type": "application/json" };
@@ -247,13 +254,27 @@ Before we start, I'd like to ensure your safety and personalize your experience.
           sessionId
         }), { status: 200, headers });
       } else {
+        // Store the safety info explicitly
         sessionData.safetyInfo = parseSafetyInfo(userMessage);
         sessionData.awaitingSafetyInfo = false;
 
-        const acknowledgment = generateSafeSuggestions(sessionData.safetyInfo, "mental"); // Default pillar for initial response
+        // Intelligently respond based on the original query
+        const pendingQuery = sessionData.pendingQuery.toLowerCase();
+
+        let followUpPrompt = "";
+
+        if (pendingQuery.includes("bmi")) {
+          followUpPrompt = "Thank you! To accurately calculate your BMI, please provide your current height (cm) and weight (kg).";
+        } else if (pendingQuery.includes("calorie") || pendingQuery.includes("eat") || pendingQuery.includes("recipe")) {
+          followUpPrompt = `Thank you for sharing about your allergies/intolerances (${sessionData.safetyInfo.nutrition}). Please let me know if there's a specific type of meal or snack you'd like suggestions for, or simply say 'give me recipes' to get some ideas right away!`;
+        } else if (pendingQuery.includes("exercise") || pendingQuery.includes("workout") || pendingQuery.includes("activity")) {
+          followUpPrompt = `Great! Noted about your limitations (${sessionData.safetyInfo.activity}). Do you prefer a home-based workout or outdoor activities? Let me know and I'll suggest something suitable!`;
+        } else {
+          followUpPrompt = "Thanks for sharing your safety information. How else can I help you today?";
+        }
 
         sessionData.messages.push({ role: "user", content: userMessage });
-        sessionData.messages.push({ role: "assistant", content: acknowledgment });
+        sessionData.messages.push({ role: "assistant", content: followUpPrompt });
 
         await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
 
@@ -263,11 +284,8 @@ Before we start, I'd like to ensure your safety and personalize your experience.
         }
 
         return new Response(JSON.stringify({
-          message: acknowledgment,
-          sessionId,
-          monetize: true,
-          pillar: "mental",
-          upgradeOptions: getMonetizationOptions(request.cf)
+          message: followUpPrompt,
+          sessionId
         }), { status: 200, headers });
       }
     }
@@ -409,7 +427,6 @@ Before we start, I'd like to ensure your safety and personalize your experience.
       systemContent += "Use Australian English spelling and examples relevant to Australia when appropriate (for instance, use \"kilograms\" and \"kilojoules\" for weight and energy, and terms like \"Mum\" instead of \"Mom\"). ";
     }
     
-    // Added safety info to systemContent as per ChatGPT Step 3
     systemContent += `
 User Allergies/Intolerances: ${sessionData.safetyInfo.nutrition}.
 Activity Limitations/Injuries: ${sessionData.safetyInfo.activity}.
