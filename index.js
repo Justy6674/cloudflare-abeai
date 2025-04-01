@@ -138,7 +138,7 @@ What area would you like to explore today?`;
     try {
       if (!newSession) {
         const kvKey = `session:${sessionId}`;
-        const stored = await env["abeai-kv"].get(kvKey);
+        const stored = await env["ABEAI_KV"].get(kvKey);
         if (stored) {
           sessionData = JSON.parse(stored);
           console.log(`🔍 Loaded session data for ${sessionId}`);
