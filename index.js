@@ -328,6 +328,37 @@ Before we start, could you please inform me about:
         if (sessionData.pendingQuery) {
           userMessage = sessionData.pendingQuery;
           sessionData.pendingQuery = null;
+          
+          // Process the pending query
+          const prompt = buildPrompt({
+            message: userMessage,
+            context: { 
+              allergies: sessionData.safetyInfo.nutrition,
+              injuries: sessionData.safetyInfo.activity,
+              conditions: sessionData.safetyInfo.clinical 
+            },
+            history: sessionData.messages
+          });
+          
+          try {
+            const aiResponse = await handleAIRequest(prompt, env);
+            sessionData.messages.push({ role: "assistant", content: aiResponse });
+            await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+
+            return new Response(
+              JSON.stringify({ message: aiResponse, sessionId }),
+              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          } catch (err) {
+            console.log("AI request error:", err);
+            return new Response(
+              JSON.stringify({ error: "Failed to process AI request" }),
+              { 
+                status: 500, 
+                headers: { ...corsHeaders, "Content-Type": "application/json" } 
+              }
+            );
+          }
         }
       }
     }
@@ -402,22 +433,4 @@ Before we start, could you please inform me about:
           message: safeResponse,
           sessionId: sessionId
         }),
-        { status: 200, headers }
-      );
-    }
-
-    let pillar = determinePillar(userMessage);
-    
-    let systemContent = `You are Abe, an AI health coach assisting users with weight loss and well-being across clinical, nutrition, activity, and mindset topics. Always respond in a friendly, patient, and nurturing tone, providing helpful and evidence-based advice.
-
-The user has provided the following safety information:
-- Allergies/Intolerances: ${sessionData.safetyInfo.nutrition}
-- Injuries/Physical Limits: ${sessionData.safetyInfo.activity}
-- Medical Conditions/Medications: ${sessionData.safetyInfo.clinical}
-
-Always adapt your suggestions to these needs. **Never recommend foods, exercises, or activities that conflict with the above constraints.** Instead, offer safe alternatives or modifications. For example, if the user has a nut allergy, any food suggestions must be nut-free.
-
-They have trusted you with personal health information; always respond with understanding and use that information to personalize your advice.`;
-    
-    if (pillar === "clinical") {
-      systemContent += "The user's question is related to clinical/medical advice. Provide general medical
+        { status: 
