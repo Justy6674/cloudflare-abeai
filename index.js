@@ -4,7 +4,6 @@ function parseSafetyInfo(userMessage) {
 
   const lowerMsg = userMessage.toLowerCase();
 
-  // Handle "NO" or empty responses explicitly
   if (lowerMsg === "no" || lowerMsg.trim() === "") {
     safetyInfo.nutrition = "None";
     safetyInfo.activity = "None";
@@ -180,39 +179,30 @@ What area would you like to explore today?`;
     }
     userMessage = userMessage.trim();
 
+    // Correct Session Initialization
     let sessionId = userId || null;
     let newSession = false;
-    
+
+    // Check cookie for existing session
     if (!sessionId) {
       const cookieHeader = request.headers.get("Cookie") || "";
       const sessionMatch = cookieHeader.match(/(?:^|;)\s*session_id=([^;]+)/);
-      if (sessionMatch) {
-        sessionId = sessionMatch[1];
-      }
-    }
-    
-    if (!sessionId) {
-      sessionId = crypto.randomUUID();
-      newSession = true;
+      sessionId = sessionMatch ? sessionMatch[1] : crypto.randomUUID();
+      newSession = !sessionMatch;
     }
 
+    // Load session data from KV
     let sessionData;
-    
     try {
-      if (!newSession) {
-        const kvKey = `session:${sessionId}`;
-        const stored = await env["ABEAI_KV"].get(kvKey);
-        if (stored) {
-          sessionData = JSON.parse(stored);
-          console.log(`🔍 Loaded session data for ${sessionId}`);
-        } else {
-          console.log(`📝 No existing session found for ID: ${sessionId}`);
-        }
-      }
+      const kvKey = `session:${sessionId}`;
+      const stored = await env["ABEAI_KV"].get(kvKey);
+      sessionData = stored ? JSON.parse(stored) : null;
     } catch (e) {
-      console.log("Error loading session data:", e);
+      console.log("KV Load Error:", e);
+      sessionData = null;
     }
-    
+
+    // Correct session initialization
     if (!sessionData) {
       sessionData = {
         messages: [],
@@ -222,26 +212,22 @@ What area would you like to explore today?`;
         offeredDiary: { clinical: false, nutrition: false, activity: false, mental: false },
         safetyInfo: null,
         awaitingSafetyInfo: false,
-        pendingQuery: null // Added to store the initial user query
+        pendingQuery: null
       };
-      console.log("📦 Created new session data");
     }
 
-    // Updated session initiation logic as per ChatGPT's suggestions
+    // Safety question logic
     if (!sessionData.safetyInfo) {
       if (!sessionData.awaitingSafetyInfo) {
         sessionData.awaitingSafetyInfo = true;
-        sessionData.pendingQuery = userMessage; // Store initial user query
-
+        sessionData.pendingQuery = userMessage; // Store original user query here
         const safetyPrompt = `
-Before we start, I'd like to ensure your safety and personalize your experience. Could you please let me know if you have:
+Before we start, could you please inform me about:
+✅ Any food allergies or intolerances?
+✅ Injuries or physical limitations?
+✅ Medical conditions or medications?
+`;
 
-✅ Any food allergies or intolerances (e.g., nuts, dairy, gluten)?  
-✅ Any injuries or physical limitations?  
-✅ Any medical conditions or medications I should consider?
-        `;
-
-        sessionData.messages.push({ role: "assistant", content: safetyPrompt });
         await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
 
         const headers = { ...corsHeaders, "Content-Type": "application/json" };
@@ -249,32 +235,20 @@ Before we start, I'd like to ensure your safety and personalize your experience.
           headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
         }
 
-        return new Response(JSON.stringify({
-          message: safetyPrompt,
-          sessionId
-        }), { status: 200, headers });
+        return new Response(JSON.stringify({ message: safetyPrompt, sessionId }), { status: 200, headers });
       } else {
-        // Store the safety info explicitly
+        // Capture safety info clearly and proceed immediately to user's original question
         sessionData.safetyInfo = parseSafetyInfo(userMessage);
         sessionData.awaitingSafetyInfo = false;
 
-        // Intelligently respond based on the original query
-        const pendingQuery = sessionData.pendingQuery.toLowerCase();
+        const acknowledgment = "Thank you! Let's proceed.";
 
-        let followUpPrompt = "";
-
-        if (pendingQuery.includes("bmi")) {
-          followUpPrompt = "Thank you! To accurately calculate your BMI, please provide your current height (cm) and weight (kg).";
-        } else if (pendingQuery.includes("calorie") || pendingQuery.includes("eat") || pendingQuery.includes("recipe")) {
-          followUpPrompt = `Thank you for sharing about your allergies/intolerances (${sessionData.safetyInfo.nutrition}). Please let me know if there's a specific type of meal or snack you'd like suggestions for, or simply say 'give me recipes' to get some ideas right away!`;
-        } else if (pendingQuery.includes("exercise") || pendingQuery.includes("workout") || pendingQuery.includes("activity")) {
-          followUpPrompt = `Great! Noted about your limitations (${sessionData.safetyInfo.activity}). Do you prefer a home-based workout or outdoor activities? Let me know and I'll suggest something suitable!`;
-        } else {
-          followUpPrompt = "Thanks for sharing your safety information. How else can I help you today?";
-        }
+        // Retrieve original query
+        userMessage = sessionData.pendingQuery || "How can you assist me?";
+        sessionData.pendingQuery = null; // Clear it after use
 
         sessionData.messages.push({ role: "user", content: userMessage });
-        sessionData.messages.push({ role: "assistant", content: followUpPrompt });
+        sessionData.messages.push({ role: "assistant", content: acknowledgment });
 
         await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
 
@@ -283,10 +257,8 @@ Before we start, I'd like to ensure your safety and personalize your experience.
           headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
         }
 
-        return new Response(JSON.stringify({
-          message: followUpPrompt,
-          sessionId
-        }), { status: 200, headers });
+        // Now immediately proceed to answer user's original question
+        // (don't return here, continue to AI processing below)
       }
     }
 
@@ -359,7 +331,29 @@ Before we start, I'd like to ensure your safety and personalize your experience.
 
     const FREE_RESPONSE_LIMIT = 3;
     const shouldMonetize = !isPremium && sessionData.usage >= FREE_RESPONSE_LIMIT;
-    
+
+    if (shouldMonetize) {
+      const upsellMessage = `You've reached your free query limit for the ${pillar} area. Please explore subscription options for continued personalized support.`;
+      const upgradeOptions = getMonetizationOptions(request.cf);
+
+      const headers = { ...corsHeaders, "Content-Type": "application/json" };
+      if (newSession) {
+        headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
+      }
+
+      sessionData.messages.push({ role: "assistant", content: upsellMessage });
+
+      await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+
+      return new Response(JSON.stringify({
+        message: upsellMessage,
+        monetize: true,
+        sessionId,
+        pillar,
+        upgradeOptions
+      }), { status: 200, headers });
+    }
+
     let pillar = "mental";
     const clinicalKeywords = ["doctor", "medication", "GLP", "medicine", "prescription", "clinic", "treatment", "diagnosis", "side effect"];
     const nutritionKeywords = ["diet", "calorie", "calories", "protein", "carb", "fat ", "meal", "nutrition", "eat ", "eating", "food", "recipe", "hydration"];
@@ -374,37 +368,6 @@ Before we start, I'd like to ensure your safety and personalize your experience.
       pillar = "activity";
     } else if (mentalKeywords.some(w => lowerMsg.includes(w))) {
       pillar = "mental";
-    }
-    
-    if (shouldMonetize) {
-      const upsellMessage = `You've reached the limit of free queries in the ${pillar} domain. To continue getting personalized advice and unlock all features, please explore our subscription options.`;
-      
-      const upgradeOptions = getMonetizationOptions(request.cf);
-      
-      sessionData.messages.push({ role: "user", content: userMessage });
-      sessionData.messages.push({ role: "assistant", content: upsellMessage });
-      
-      try {
-        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
-      } catch (e) {
-        console.log("Error saving session after monetization:", e);
-      }
-      
-      const headers = { ...corsHeaders, "Content-Type": "application/json" };
-      if (newSession) {
-        headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
-      }
-      
-      return new Response(
-        JSON.stringify({ 
-          message: upsellMessage,
-          sessionId: sessionId,
-          monetize: true,
-          pillar: pillar,
-          upgradeOptions: upgradeOptions
-        }),
-        { status: 200, headers }
-      );
     }
 
     let systemContent = "You are Abe, an AI health coach assisting users with weight loss and well-being across clinical, nutrition, activity, and mindset topics. Always respond with a friendly, empathetic tone and provide helpful, evidence-based advice.\n\n";
@@ -579,12 +542,15 @@ Always avoid recommendations conflicting with the above.`;
 
     sessionData.messages.push({ role: "user", content: userMessage });
     sessionData.messages.push({ role: "assistant", content: assistantMessage });
+
+    // Increment usage only after successful AI call
     sessionData.usage += 1;
 
+    // Now store KV
     try {
       await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
     } catch (e) {
-      console.log("Error saving final session data:", e);
+      console.log("Final KV Save Error:", e);
     }
 
     const responseBody = {
