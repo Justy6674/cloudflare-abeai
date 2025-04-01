@@ -308,7 +308,6 @@ Before we start, could you please inform me about:
         sessionData.messages.push({ role: "user", content: userMessage });
         sessionData.messages.push({ role: "assistant", content: safeReply });
         sessionData.safetyInfoProvided = true;
-        sessionData.pendingQuery = null;
 
         try {
           await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
@@ -421,4 +420,4 @@ Always adapt your suggestions to these needs. **Never recommend foods, exercises
 They have trusted you with personal health information; always respond with understanding and use that information to personalize your advice.`;
     
     if (pillar === "clinical") {
-      systemContent += "The user's question is related to clinical/medical advice. Provide general medical information regarding weight
+      systemContent += "The user's question is related to clinical/medical advice. Provide general medical information regarding weight management or health, but do **not** give definitive medical
