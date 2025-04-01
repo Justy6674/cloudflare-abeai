@@ -258,18 +258,24 @@ What area would you like to explore today?`;
 
     console.log(`Session loaded, sessionId: ${sessionId}, usage: ${sessionData.usage}, nutritionResponses: ${sessionData.nutritionResponses}, inSafetyFlow: ${sessionData.inSafetyFlow}`);
 
+    // Determine the context (pillar) of the user message
+    const pillar = determinePillar(userMessage);
+    
     // Safety question logic
     if (!sessionData.safetyInfo) {
       if (!sessionData.awaitingSafetyInfo) {
         sessionData.awaitingSafetyInfo = true;
         sessionData.pendingQuery = userMessage;
         sessionData.inSafetyFlow = true;
-        const safetyPrompt = `
-Before we start, could you please inform me about:
-✅ Any food allergies or intolerances?
-✅ Injuries or physical limitations?
-✅ Medical conditions or medications?
-`;
+        
+        let safetyPrompt = "Before we start, could you please inform me about:";
+        if (pillar === "nutrition") {
+          safetyPrompt += "\n✅ Any food allergies or intolerances?";
+        } else if (pillar === "activity") {
+          safetyPrompt += "\n✅ Injuries or physical limitations?";
+        } else if (pillar === "clinical") {
+          safetyPrompt += "\n✅ Medical conditions or medications?";
+        }
 
         sessionData.messages.push({ role: "assistant", content: safetyPrompt });
 
@@ -302,7 +308,6 @@ Before we start, could you please inform me about:
         sessionData.awaitingSafetyInfo = false;
         sessionData.inSafetyFlow = false;
 
-        const pillar = determinePillar(sessionData.pendingQuery || userMessage);
         const safeReply = generateSafeSuggestions(sessionData.safetyInfo, pillar);
 
         sessionData.messages.push({ role: "user", content: userMessage });
@@ -328,7 +333,7 @@ Before we start, could you please inform me about:
         if (sessionData.pendingQuery) {
           userMessage = sessionData.pendingQuery;
           sessionData.pendingQuery = null;
-          
+
           // Process the pending query
           const prompt = buildPrompt({
             message: userMessage,
@@ -411,4 +416,4 @@ Before we start, could you please inform me about:
       sessionData.messages.push({ role: "assistant", content: safeResponse });
       
       try {
-        await env["
+        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
