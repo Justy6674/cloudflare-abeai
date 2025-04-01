@@ -9,7 +9,7 @@ I'm here to support your wellness journey across four key areas:
 🏋️ Activity & Fitness
 🧠 Mental Wellbeing
 
-What area would you like to explore today? Whether you're looking to understand your health metrics, plan nutritious meals, find enjoyable ways to stay active, or boost your mental resilience – I'm here to help, without judgment.
+What area would you like to explore today?`;
 
 
 
