@@ -218,7 +218,7 @@ What area would you like to explore today?`;
       
       // Save session state to KV
       try {
-        await env["abeai-kv"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
       } catch (e) {
         console.log("Error saving session data:", e);
       }
@@ -246,7 +246,7 @@ What area would you like to explore today?`;
     
     // Additional monetization logic based on pillar detection
     let pillar = "mental";
-    const clinicalKeywords = ["doctor", "medication", "medicine", "prescription", "clinic", "treatment", "diagnosis", "side effect"];
+    const clinicalKeywords = ["doctor", "medication", "GLP", "medicine", "prescription", "clinic", "treatment", "diagnosis", "side effect"];
     const nutritionKeywords = ["diet", "calorie", "calories", "protein", "carb", "fat ", "meal", "nutrition", "eat ", "eating", "food", "recipe", "hydration"];
     const activityKeywords = ["exercise", "workout", "work out", "gym", "sport", "training", "run", "running", "walk", "walking", "yoga", "activity", "active", "steps"];
     const mentalKeywords = ["motivation", "stress", "anxiety", "depression", "mood", "sleep", "mindset", "mental", "therapy", "habit", "feel", "feeling"];
