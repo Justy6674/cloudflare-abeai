@@ -265,9 +265,10 @@ Before we start, could you please inform me about:
         sessionData.awaitingSafetyInfo = false;
 
         const acknowledgment = "Thank you! Let's proceed.";
-        userMessage = sessionData.pendingQuery;
+        userMessage = sessionData.pendingQuery || "How can you assist me?";
         sessionData.pendingQuery = null;
 
+        sessionData.messages.push({ role: "user", content: userMessage });
         sessionData.messages.push({ role: "assistant", content: acknowledgment });
 
         try {
@@ -424,4 +425,212 @@ Before we start, could you please inform me about:
     }
     
     if (sessionData.minor) {
-      systemContent += "The user is a minor (under
+      systemContent += "The user is a minor (under 18), so ensure all advice is appropriate for someone younger. Avoid recommendations not suitable for adolescents (like certain supplements or extreme diets) and encourage involving a parent/guardian or a doctor when necessary. ";
+    }
+    
+    if (request.cf && request.cf.country && request.cf.country.toUpperCase() === "AU") {
+      systemContent += "Use Australian English spelling and examples relevant to Australia when appropriate (for instance, use \"kilograms\" and \"kilojoules\" for weight and energy, and terms like \"Mum\" instead of \"Mom\"). ";
+    }
+    
+    systemContent += `
+User Allergies/Intolerances: ${sessionData.safetyInfo.nutrition}.
+Activity Limitations/Injuries: ${sessionData.safetyInfo.activity}.
+Medical Conditions/Medications: ${sessionData.safetyInfo.clinical}.
+Always avoid recommendations conflicting with the above.`;
+
+    systemContent += "Never encourage unsafe or unhealthy behaviors (like self-harm, starvation, or dangerous weight loss tactics). If the user seems to be in crisis or asking for harmful advice, respond with care and encourage seeking professional help. Also, when it fits naturally, remind the user about keeping a health diary or log (for example, a food diary, exercise log, or mood journal) to track their progress. Do not force the topic, but gently suggest it if it would help. ";
+    systemContent += "\nNow, answer the user's question helpfully.";
+
+    const openaiMessages = [];
+    openaiMessages.push({ role: "system", content: systemContent });
+    
+    for (const msg of sessionData.messages) {
+      openaiMessages.push(msg);
+    }
+    
+    openaiMessages.push({ role: "user", content: userMessage });
+
+    const model = isPremium ? "gpt-4" : "gpt-3.5-turbo";
+    const payload = {
+      model: model,
+      messages: openaiMessages,
+      temperature: 0.7,
+      max_tokens: isPremium ? 2000 : 1000
+    };
+    
+    const gatewayBaseUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai";
+    const apiUrl = `${gatewayBaseUrl}/chat/completions`;
+    
+    console.log("Using API URL:", apiUrl);
+    
+    const apiHeaders = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${env.OPENAI_KEY}`
+    };
+
+    let aiResponse;
+    let aiResult;
+    const maxRetries = 3;
+    let waitTime = 500;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Attempt ${attempt} to call OpenAI API via AI Gateway`);
+        aiResponse = await fetch(apiUrl, {
+          method: "POST",
+          headers: apiHeaders,
+          body: JSON.stringify(payload)
+        });
+      } catch (err) {
+        console.log(`API call error (attempt ${attempt}):`, err);
+        aiResponse = null;
+      }
+      
+      if (aiResponse && aiResponse.ok) {
+        try {
+          aiResult = await aiResponse.json();
+          break;
+        } catch (e) {
+          console.log("Failed to parse AI response:", e);
+          return new Response(
+            JSON.stringify({ error: "Failed to parse AI response" }),
+            { 
+              status: 500, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            }
+          );
+        }
+      } else if (aiResponse && (aiResponse.status === 429 || aiResponse.status === 503 || aiResponse.status === 524)) {
+        if (attempt < maxRetries) {
+          console.log(`Retrying after status ${aiResponse.status}`);
+          await new Promise(res => setTimeout(res, waitTime));
+          waitTime *= 2;
+          continue;
+        } else {
+          let errorMsg = `AI service error (status ${aiResponse.status})`;
+          try {
+            const errorData = await aiResponse.json();
+            if (errorData.error && errorData.error.message) {
+              errorMsg = errorData.error.message;
+            }
+          } catch (_) {}
+          
+          console.log("Final error after retries:", errorMsg);
+          return new Response(
+            JSON.stringify({ error: errorMsg }),
+            { 
+              status: 502, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            }
+          );
+        }
+      } else {
+        if (attempt < maxRetries) {
+          console.log(`Retrying after unknown error (attempt ${attempt})`);
+          await new Promise(res => setTimeout(res, waitTime));
+          waitTime *= 2;
+          continue;
+        } else {
+          const statusCode = aiResponse ? aiResponse.status : 500;
+          console.log(`Failed all retries, status: ${statusCode}`);
+          return new Response(
+            JSON.stringify({ error: "Failed to retrieve a response from the AI service." }),
+            { 
+              status: statusCode, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            }
+          );
+        }
+      }
+    }
+
+    if (!aiResult) {
+      console.log("No AI result received");
+      return new Response(
+        JSON.stringify({ error: "No response from AI service" }),
+        { 
+          status: 502, 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        }
+      );
+    }
+
+    let assistantMessage = "";
+    if (aiResult.choices && aiResult.choices.length > 0 && aiResult.choices[0].message) {
+      assistantMessage = aiResult.choices[0].message.content ?? "";
+    }
+    
+    if (!assistantMessage) {
+      console.log("AI returned empty message");
+      return new Response(
+        JSON.stringify({ error: "AI returned an empty message" }),
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        }
+      );
+    }
+
+    const shouldAddMonetizationHint = !isPremium && sessionData.usage >= 2 && sessionData.usage <= 4;
+    
+    if (!sessionData.offeredDiary[pillar]) {
+      const answerLower = assistantMessage.toLowerCase();
+      if (!answerLower.includes("diary") && !answerLower.includes("journal") && !answerLower.includes("log ")) {
+        let diaryPrompt = "";
+        if (pillar === "clinical") {
+          diaryPrompt = " You might also consider keeping a health journal – for example, jot down your symptoms or medical readings daily. This can help you and your doctor track progress over time.";
+        } else if (pillar === "nutrition") {
+          diaryPrompt = " It could be helpful to keep a food diary. Tracking what you eat and drink each day can give you insight into your habits and help you stay accountable.";
+        } else if (pillar === "activity") {
+          diaryPrompt = " Consider maintaining an exercise log. Writing down your daily activities or workouts, and how you feel after, can be motivating and help you see improvements over time.";
+        } else if (pillar === "mental") {
+          diaryPrompt = " You might try keeping a journal for your thoughts or moods. Sometimes writing down how you feel each day can help manage stress and track your emotional well-being.";
+        }
+        if (diaryPrompt) {
+          assistantMessage += diaryPrompt;
+        }
+      }
+      sessionData.offeredDiary[pillar] = true;
+    }
+    
+    if (shouldAddMonetizationHint) {
+      assistantMessage += "\n\n*Looking for more personalized guidance? Consider upgrading to our Premium plan for tailored advice and unlimited conversations.*";
+    }
+
+    sessionData.messages.push({ role: "user", content: userMessage });
+    sessionData.messages.push({ role: "assistant", content: assistantMessage });
+
+    sessionData.usage += 1;
+
+    try {
+      await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+    } catch (e) {
+      console.log("Final KV Save Error:", e);
+      return new Response(
+        JSON.stringify({ error: "Failed to save session data" }),
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        }
+      );
+    }
+
+    const responseBody = {
+      message: assistantMessage,
+      sessionId: sessionId,
+      usage: sessionData.usage,
+      pillar: pillar,
+      tier: sessionData.tier
+    };
+    
+    const responseHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+    if (newSession) {
+      responseHeaders["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
+    }
+    
+    return new Response(
+      JSON.stringify(responseBody), 
+      { status: 200, headers: responseHeaders }
+    );
+  }
+}
