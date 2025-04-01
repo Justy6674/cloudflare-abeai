@@ -3,7 +3,7 @@ function parseSafetyInfo(userMessage) {
   const safetyInfo = { nutrition: "", activity: "", clinical: "" };
   const lowerMsg = userMessage.toLowerCase();
 
-  if (lowerMsg === "no" || lowerMsg.trim() === "") {
+  if (lowerMsg === "no" || lowerMsg.trim() === "" || lowerMsg === "nope") {
     safetyInfo.nutrition = "None";
     safetyInfo.activity = "None";
     safetyInfo.clinical = "None";
@@ -420,4 +420,4 @@ Always adapt your suggestions to these needs. **Never recommend foods, exercises
 They have trusted you with personal health information; always respond with understanding and use that information to personalize your advice.`;
     
     if (pillar === "clinical") {
-      systemContent += "The user's question is related to clinical/medical advice. Provide general medical information regarding weight management or health, but do **not** give definitive medical
+      systemContent += "The user's question is related to clinical/medical advice. Provide general medical
