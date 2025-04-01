@@ -40,7 +40,7 @@ function generateSafeSuggestions(safetyInfo, pillar) {
 1. Greek yogurt with fresh berries
 2. Carrot sticks and hummus
 3. Edamame beans
-To get more personalized recipes, consider exploring our Premium subscription options.`;
+To get more personalized recipes, you can explore our subscription options at www.downscaleai.com.`;
   }
 
   if (pillar === "activity" && safetyInfo.activity !== "None") {
@@ -48,7 +48,7 @@ To get more personalized recipes, consider exploring our Premium subscription op
 1. Gentle yoga
 2. Water-based exercises (swimming, aqua aerobics)
 3. Seated resistance training
-For more tailored exercise plans, you might find our Premium coaching helpful.`;
+For more tailored exercise plans, you might find our Premium coaching helpful at www.downscaleai.com.`;
   }
 
   if (pillar === "clinical" && safetyInfo.clinical !== "None") {
@@ -56,25 +56,6 @@ For more tailored exercise plans, you might find our Premium coaching helpful.`;
   }
 
   return "Thanks for sharing! How else can I assist you today?";
-}
-
-// Helper to provide monetization options
-function getMonetizationOptions(cf) {
-  const options = [
-    { name: "PAYG", description: "Flexible Pay-as-you-go", url: "https://downscaleai.com/payg" },
-    { name: "Essentials", description: "Wellness Tracking", url: "https://downscaleai.com/essentials" },
-    { name: "Premium", description: "Personalized Coaching", url: "https://downscaleai.com/premium" }
-  ];
-
-  if (cf && cf.country && cf.country.toUpperCase() === "AU") {
-    options.push({
-      name: "Clinical",
-      description: "Medical Weight Management",
-      url: "https://www.downscale.com.au"
-    });
-  }
-
-  return options;
 }
 
 // Helper to determine pillar from user message
@@ -171,19 +152,51 @@ What area would you like to explore today?`;
     const userId = body.user_id || null;
     
     if (userMessage.toLowerCase() === "welcome" || !userMessage) {
+      const sessionId = userId || crypto.randomUUID();
       const welcomeResponse = {
         message: WELCOME_MESSAGE,
-        sessionId: userId || crypto.randomUUID(),
+        sessionId: sessionId,
         pillar: "mental"
       };
 
-      console.log(`🎉 Welcome message triggered`);
+      // Initialize new session data for welcome message
+      const newSessionData = {
+        messages: [{ role: "assistant", content: WELCOME_MESSAGE }],
+        usage: 0,
+        nutritionResponses: 0,
+        tier: body.tier || "free",
+        minor: false,
+        offeredDiary: { clinical: false, nutrition: false, activity: false, mental: false },
+        safetyInfo: null,
+        awaitingSafetyInfo: false,
+        pendingQuery: null,
+        safetyInfoProvided: false,
+        inSafetyFlow: false
+      };
+
+      try {
+        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(newSessionData));
+      } catch (e) {
+        console.log("KV Save Error during welcome:", e);
+        return new Response(
+          JSON.stringify({ error: "Failed to save session data" }),
+          { 
+            status: 500, 
+            headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          }
+        );
+      }
+
+      console.log(`🎉 Welcome message triggered, sessionId: ${sessionId}, usage: ${newSessionData.usage}, nutritionResponses: ${newSessionData.nutritionResponses}`);
+
+      const headers = { ...corsHeaders, "Content-Type": "application/json" };
+      headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
 
       return new Response(
         JSON.stringify(welcomeResponse),
         { 
           status: 200, 
-          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          headers 
         }
       );
     }
@@ -230,6 +243,7 @@ What area would you like to explore today?`;
       sessionData = {
         messages: [],
         usage: 0,
+        nutritionResponses: 0,
         tier: body.tier || "free",
         minor: false,
         offeredDiary: { clinical: false, nutrition: false, activity: false, mental: false },
@@ -239,7 +253,10 @@ What area would you like to explore today?`;
         safetyInfoProvided: false,
         inSafetyFlow: false
       };
+      newSession = true;
     }
+
+    console.log(`Session loaded, sessionId: ${sessionId}, usage: ${sessionData.usage}, nutritionResponses: ${sessionData.nutritionResponses}, inSafetyFlow: ${sessionData.inSafetyFlow}`);
 
     // Safety question logic
     if (!sessionData.safetyInfo) {
@@ -269,6 +286,8 @@ Before we start, could you please inform me about:
           );
         }
 
+        console.log(`Safety prompt sent, usage: ${sessionData.usage}, nutritionResponses: ${sessionData.nutritionResponses}`);
+
         const headers = { ...corsHeaders, "Content-Type": "application/json" };
         if (newSession) {
           headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
@@ -290,6 +309,9 @@ Before we start, could you please inform me about:
         sessionData.messages.push({ role: "assistant", content: safeReply });
         sessionData.safetyInfoProvided = true;
         sessionData.pendingQuery = null;
+        if (pillar === "nutrition") {
+          sessionData.nutritionResponses += 1;
+        }
 
         try {
           await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
@@ -303,6 +325,8 @@ Before we start, could you please inform me about:
             }
           );
         }
+
+        console.log(`Safe suggestions sent, usage: ${sessionData.usage}, nutritionResponses: ${sessionData.nutritionResponses}`);
 
         const headers = { ...corsHeaders, "Content-Type": "application/json" };
         if (newSession) {
@@ -388,42 +412,6 @@ Before we start, could you please inform me about:
         }),
         { status: 200, headers }
       );
-    }
-
-    const FREE_RESPONSE_LIMIT = 3;
-    const reachedFreeLimit = !isPremium && sessionData.usage >= FREE_RESPONSE_LIMIT;
-    if (reachedFreeLimit && !sessionData.safetyInfoProvided && !sessionData.inSafetyFlow) {
-      const pillar = determinePillar(userMessage);
-      const upsellMessage = `You've reached your free query limit for the ${pillar} area. Please explore subscription options for continued personalized support.`;
-      const upgradeOptions = getMonetizationOptions(request.cf);
-
-      const headers = { ...corsHeaders, "Content-Type": "application/json" };
-      if (newSession) {
-        headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
-      }
-
-      sessionData.messages.push({ role: "assistant", content: upsellMessage });
-
-      try {
-        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
-      } catch (e) {
-        console.log("KV Save Error during monetization:", e);
-        return new Response(
-          JSON.stringify({ error: "Failed to save session data" }),
-          { 
-            status: 500, 
-            headers: { ...corsHeaders, "Content-Type": "application/json" } 
-          }
-        );
-      }
-
-      return new Response(JSON.stringify({
-        message: upsellMessage,
-        monetize: true,
-        sessionId,
-        pillar,
-        upgradeOptions
-      }), { status: 200, headers });
     }
 
     let pillar = determinePillar(userMessage);
@@ -590,8 +578,14 @@ They have trusted you with personal health information; always respond with unde
       );
     }
 
-    const shouldAddMonetizationHint = !isPremium && sessionData.usage >= 2 && sessionData.usage <= 4;
-    
+    // Handle nutrition response limit and nudge
+    if (pillar === "nutrition") {
+      sessionData.nutritionResponses += 1;
+      if (!isPremium && sessionData.nutritionResponses >= 3 && sessionData.nutritionResponses <= 5) {
+        assistantMessage += "\n\nI’m happy to help with your nutrition questions! Since we’ve explored a few ideas already, you might find even more personalized recipes and guidance by taking a look at our subscription plans at www.downscaleai.com. It’s a great way to get tailored support for your wellness journey!";
+      }
+    }
+
     if (!sessionData.offeredDiary[pillar]) {
       const answerLower = assistantMessage.toLowerCase();
       if (!answerLower.includes("diary") && !answerLower.includes("journal") && !answerLower.includes("log ")) {
@@ -610,10 +604,6 @@ They have trusted you with personal health information; always respond with unde
         }
       }
       sessionData.offeredDiary[pillar] = true;
-    }
-    
-    if (shouldAddMonetizationHint) {
-      assistantMessage += "\n\nIf you’d like to dive deeper or get more personalized plans, I’m here to support you through our Premium plan.";
     }
 
     sessionData.messages.push({ role: "user", content: userMessage });
@@ -634,6 +624,8 @@ They have trusted you with personal health information; always respond with unde
         }
       );
     }
+
+    console.log(`Response sent, usage: ${sessionData.usage}, nutritionResponses: ${sessionData.nutritionResponses}`);
 
     const responseBody = {
       message: assistantMessage,
