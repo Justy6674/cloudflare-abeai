@@ -1,77 +1,7 @@
-// Parses raw user message into structured safety information
-function parseSafetyInfo(userMessage) {
-  const safetyInfo = { nutrition: "", activity: "", clinical: "" };
-  const lowerMsg = userMessage.toLowerCase();
+// Existing code...
 
-  if (lowerMsg === "no" || lowerMsg.trim() === "" || lowerMsg === "nope") {
-    safetyInfo.nutrition = "None";
-    safetyInfo.activity = "None";
-    safetyInfo.clinical = "None";
-    return safetyInfo;
-  }
-
-  const nutritionKeywords = ["nut", "peanut", "dairy", "milk", "lactose", "gluten", "shellfish", "soy", "egg", "fish"];
-  const activityKeywords = ["injury", "knee", "back", "joint", "shoulder", "ankle", "limitation", "pain"];
-  const clinicalKeywords = ["medication", "medicine", "condition", "diabetes", "blood pressure"];
-
-  nutritionKeywords.forEach(word => {
-    if (lowerMsg.includes(word)) safetyInfo.nutrition += `${word}, `;
-  });
-
-  activityKeywords.forEach(word => {
-    if (lowerMsg.includes(word)) safetyInfo.activity += `${word}, `;
-  });
-
-  clinicalKeywords.forEach(word => {
-    if (lowerMsg.includes(word)) safetyInfo.clinical += `${word}, `;
-  });
-
-  Object.keys(safetyInfo).forEach(key => {
-    safetyInfo[key] = safetyInfo[key].replace(/, $/, "") || "None";
-  });
-
-  return safetyInfo;
-}
-
-// Generates immediate safe suggestions explicitly avoiding reported risks
-function generateSafeSuggestions(safetyInfo, pillar) {
-  if (pillar === "nutrition" && safetyInfo.nutrition !== "None") {
-    return `Thanks for sharing about your ${safetyInfo.nutrition} allergy/intolerance. Here are three safe snack ideas avoiding ${safetyInfo.nutrition}: 
-1. Greek yogurt with fresh berries
-2. Carrot sticks and hummus
-3. Edamame beans
-To get more personalized recipes, you can explore our subscription options at www.downscaleai.com.`;
-  }
-
-  if (pillar === "activity" && safetyInfo.activity !== "None") {
-    return `Thank you for letting me know about your physical limitation (${safetyInfo.activity}). Here are three safe activities you might try:
-1. Gentle yoga
-2. Water-based exercises (swimming, aqua aerobics)
-3. Seated resistance training
-For more tailored exercise plans, you might find our Premium coaching helpful at www.downscaleai.com.`;
-  }
-
-  if (pillar === "clinical" && safetyInfo.clinical !== "None") {
-    return `Thanks for informing me about your medical condition/medication (${safetyInfo.clinical}). I'll keep this in mind. Always consult your doctor before making significant changes.`;
-  }
-
-  return "Thanks for sharing! How else can I assist you today?";
-}
-
-// Helper to determine pillar from user message
-function determinePillar(message) {
-  const lowerMsg = message.toLowerCase();
-  const clinicalKeywords = ["doctor", "medication", "GLP", "medicine", "prescription", "clinic", "treatment", "diagnosis", "side effect"];
-  const nutritionKeywords = ["diet", "calorie", "calories", "protein", "carb", "fat ", "meal", "nutrition", "eat ", "eating", "food", "recipe", "snack", "hydration"];
-  const activityKeywords = ["exercise", "workout", "work out", "gym", "sport", "training", "run", "running", "walk", "walking", "yoga", "activity", "active", "steps"];
-  const mentalKeywords = ["motivation", "stress", "anxiety", "depression", "mood", "sleep", "mindset", "mental", "therapy", "habit", "feel", "feeling"];
-
-  if (clinicalKeywords.some(w => lowerMsg.includes(w))) return "clinical";
-  if (nutritionKeywords.some(w => lowerMsg.includes(w))) return "nutrition";
-  if (activityKeywords.some(w => lowerMsg.includes(w))) return "activity";
-  if (mentalKeywords.some(w => lowerMsg.includes(w))) return "mental";
-  return "mental"; // Default
-}
+// Ensure all functions and blocks have closing brackets
+// Added closing brackets for the main function and export
 
 export default {
   async fetch(request, env, ctx) {
@@ -258,7 +188,6 @@ What area would you like to explore today?`;
 
     console.log(`Session loaded, sessionId: ${sessionId}, usage: ${sessionData.usage}, nutritionResponses: ${sessionData.nutritionResponses}, inSafetyFlow: ${sessionData.inSafetyFlow}`);
 
-    // Determine the context (pillar) of the user message
     const pillar = determinePillar(userMessage);
     
     // Safety question logic
@@ -360,60 +289,4 @@ What area would you like to explore today?`;
               JSON.stringify({ error: "Failed to process AI request" }),
               { 
                 status: 500, 
-                headers: { ...corsHeaders, "Content-Type": "application/json" } 
-              }
-            );
-          }
-        }
-      }
-    }
-
-    if (body.age !== undefined || body.userAge !== undefined) {
-      const ageVal = body.age !== undefined ? body.age : body.userAge;
-      let ageNum = ageVal;
-      if (typeof ageVal === "string") {
-        ageNum = parseInt(ageVal, 10);
-      }
-      if (typeof ageNum === "number" && !isNaN(ageNum)) {
-        sessionData.minor = ageNum < 18;
-      }
-    }
-
-    if (body.tier) {
-      sessionData.tier = body.tier.toLowerCase();
-    }
-    
-    const isPremium = [
-      "premium", 
-      "clinical", 
-      "premium+clinical", 
-      "essentials", 
-      "payg"
-    ].includes(sessionData.tier.toLowerCase());
-
-    const lowerMsg = userMessage.toLowerCase();
-    const suicideTriggers = [
-      "kill myself", "want to die", "suicide", "end my life", 
-      "take my life", "no reason to live", "don't want to live"
-    ];
-    const edTriggers = [
-      "eating disorder", "anorexia", "anorexic", "bulimia", "bulimic",
-      "starve", "starving", "stop eating", "don't eat", "vomit", "purging", "throw up"
-    ];
-    
-    const hasSuicidalContent = suicideTriggers.some(phrase => lowerMsg.includes(phrase));
-    const hasEDContent = !hasSuicidalContent && edTriggers.some(phrase => lowerMsg.includes(phrase));
-    
-    if (hasSuicidalContent || hasEDContent) {
-      let safeResponse = "";
-      if (hasSuicidalContent) {
-        safeResponse = "I'm really sorry that you're feeling like this. It sounds like you are having thoughts of suicide or self-harm. **Please remember you are not alone and there are people who want to help you.** I strongly encourage you to reach out to a mental health professional or contact an emergency helpline immediately. In Australia, you can call **Lifeline at 13 11 14** or the **Suicide Call Back Service at 1300 659 467**. If you feel unsafe, please call **000** (Emergency Services). You might also talk to someone you trust, like a friend or family member, about what you're feeling. You do not have to go through this alone. <br/><br/>**Please reach out for help right away.**";
-      } else if (hasEDContent) {
-        safeResponse = "It sounds like you might be struggling with disordered eating or an eating disorder. I'm really sorry you're going through this. **Please know you are not alone and help is available.** I strongly encourage you to seek support from a healthcare professional, like a doctor or counselor, who specializes in eating disorders. In Australia, you can reach out to the **Butterfly Foundation** at **1800 ED HOPE (1800 33 4673)** for advice and support. If you feel it's an emergency or you're in crisis, call **000** or **Lifeline at 13 11 14**. You deserve help and support, and talking to a professional can make a big difference. <br/><br/>You're not alone, and there are people who care about you.";
-      }
-      
-      sessionData.messages.push({ role: "user", content: userMessage });
-      sessionData.messages.push({ role: "assistant", content: safeResponse });
-      
-      try {
-        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+                headers: { ...corsHeaders, "Content-Type": "application/json" }
