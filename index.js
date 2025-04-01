@@ -1,6 +1,79 @@
+// Helper functions added above the main handler as specified
+// Parses raw user message into structured safety information
+function parseSafetyInfo(userMessage) {
+  const safetyInfo = { nutrition: "", activity: "", clinical: "" };
+
+  const lowerMsg = userMessage.toLowerCase();
+
+  const nutritionKeywords = ["nut", "dairy", "gluten", "shellfish", "soy", "egg", "fish"];
+  const activityKeywords = ["injury", "knee", "back", "joint", "limitation", "pain"];
+  const clinicalKeywords = ["medication", "medicine", "condition", "diabetes", "blood pressure"];
+
+  nutritionKeywords.forEach(word => {
+    if (lowerMsg.includes(word)) safetyInfo.nutrition += `${word}, `;
+  });
+
+  activityKeywords.forEach(word => {
+    if (lowerMsg.includes(word)) safetyInfo.activity += `${word}, `;
+  });
+
+  clinicalKeywords.forEach(word => {
+    if (lowerMsg.includes(word)) safetyInfo.clinical += `${word}, `;
+  });
+
+  Object.keys(safetyInfo).forEach(key => {
+    safetyInfo[key] = safetyInfo[key].replace(/, $/, "") || "None";
+  });
+
+  return safetyInfo;
+}
+
+// Generates immediate safe suggestions explicitly avoiding reported risks
+function generateSafeSuggestions(safetyInfo, pillar) {
+  if (pillar === "nutrition" && safetyInfo.nutrition !== "None") {
+    return `Thanks for sharing about your ${safetyInfo.nutrition} allergy/intolerance. Here are three safe snack ideas avoiding ${safetyInfo.nutrition}: 
+1. Greek yogurt with fresh berries
+2. Carrot sticks and hummus
+3. Edamame beans
+To get more personalized recipes, consider exploring our Premium subscription options.`;
+  }
+
+  if (pillar === "activity" && safetyInfo.activity !== "None") {
+    return `Thank you for letting me know about your physical limitation (${safetyInfo.activity}). Here are three safe activities you might try:
+1. Gentle yoga
+2. Water-based exercises (swimming, aqua aerobics)
+3. Seated resistance training
+For more tailored exercise plans, you might find our Premium coaching helpful.`;
+  }
+
+  if (pillar === "clinical" && safetyInfo.clinical !== "None") {
+    return `Thanks for informing me about your medical condition/medication (${safetyInfo.clinical}). I'll keep this in mind. Always consult your doctor before making significant changes.`;
+  }
+
+  return "Thanks for sharing! How else can I assist you today?";
+}
+
+// Helper to provide monetization options
+function getMonetizationOptions(cf) {
+  const options = [
+    { name: "PAYG", description: "Flexible Pay-as-you-go", url: "https://downscaleai.com/payg" },
+    { name: "Essentials", description: "Wellness Tracking", url: "https://downscaleai.com/essentials" },
+    { name: "Premium", description: "Personalized Coaching", url: "https://downscaleai.com/premium" }
+  ];
+
+  if (cf && cf.country && cf.country.toUpperCase() === "AU") {
+    options.push({
+      name: "Clinical",
+      description: "Medical Weight Management",
+      url: "https://www.downscale.com.au"
+    });
+  }
+
+  return options;
+}
+
 export default {
   async fetch(request, env, ctx) {
-    // Enhanced Welcome Message
     const WELCOME_MESSAGE = `Hi, I'm AbeAI, your personalised health companion. 
 
 I'm here to support your wellness journey across four key areas:
@@ -11,9 +84,6 @@ I'm here to support your wellness journey across four key areas:
 
 What area would you like to explore today?`;
 
-
-
-    // Define allowed origins for CORS (update with your actual Webflow domain)
     const allowedOrigins = [
       "https://www.abeai.health",
       "https://abeai.health",
@@ -22,7 +92,6 @@ What area would you like to explore today?`;
       "https://api.abeai.health",  
       "http://api.abeai.health",   
       "http://localhost:3000",
-      // Add your Webflow domain here if not already included
       "https://downscaleweightloss.webflow.io"
     ];
     
@@ -36,15 +105,12 @@ What area would you like to explore today?`;
     if (origin && allowedOrigins.includes(origin)) {
       corsHeaders["Access-Control-Allow-Origin"] = origin;
     } else if (origin) {
-      // If origin is not in the list, you can log this for debugging
       console.log(`🚫 Unauthorized origin attempt: ${origin}`);
       return new Response("Unauthorized origin", { status: 401 });
     } else {
-      // No Origin (e.g., server-to-server request)
       corsHeaders["Access-Control-Allow-Origin"] = "*";
     }
 
-    // Handle CORS preflight request
     if (request.method === "OPTIONS") {
       return new Response(null, { 
         status: 204, 
@@ -52,7 +118,6 @@ What area would you like to explore today?`;
       });
     }
 
-    // Only allow POST for main requests
     if (request.method !== "POST") {
       return new Response(
         JSON.stringify({ error: "Method not allowed" }),
@@ -63,7 +128,6 @@ What area would you like to explore today?`;
       );
     }
 
-    // Parse request body as JSON
     let body;
     try {
       body = await request.json();
@@ -78,15 +142,11 @@ What area would you like to explore today?`;
       );
     }
 
-    // Log request for debugging (remove in production)
     console.log("Request body:", JSON.stringify(body));
 
-    // Check if we're receiving a message from the Webflow chatbot
-    // Adapt this based on your actual frontend implementation
     let userMessage = body.message || body.prompt || "";
     const userId = body.user_id || null;
     
-    // Special Handling for Welcome Message
     if (userMessage.toLowerCase() === "welcome" || !userMessage) {
       const welcomeResponse = {
         message: WELCOME_MESSAGE,
@@ -113,11 +173,9 @@ What area would you like to explore today?`;
     }
     userMessage = userMessage.trim();
 
-    // Session handling - use user_id from request if provided
     let sessionId = userId || null;
     let newSession = false;
     
-    // If no userId was provided in the request but we have a cookie, use that
     if (!sessionId) {
       const cookieHeader = request.headers.get("Cookie") || "";
       const sessionMatch = cookieHeader.match(/(?:^|;)\s*session_id=([^;]+)/);
@@ -126,13 +184,11 @@ What area would you like to explore today?`;
       }
     }
     
-    // If still no sessionId, create a new one
     if (!sessionId) {
       sessionId = crypto.randomUUID();
       newSession = true;
     }
 
-    // Load existing session data from KV or initialize a new session object
     let sessionData;
     
     try {
@@ -148,22 +204,74 @@ What area would you like to explore today?`;
       }
     } catch (e) {
       console.log("Error loading session data:", e);
-      // If there's an error accessing KV, continue with a new session
     }
     
-    // Initialize new session if needed
     if (!sessionData) {
       sessionData = {
         messages: [],
         usage: 0,
         tier: body.tier || "free",
         minor: false,
-        offeredDiary: { clinical: false, nutrition: false, activity: false, mental: false }
+        offeredDiary: { clinical: false, nutrition: false, activity: false, mental: false },
+        // Added safetyInfo and awaitingSafetyInfo as per ChatGPT instructions
+        safetyInfo: null,
+        awaitingSafetyInfo: false
       };
       console.log("📦 Created new session data");
     }
 
-    // Update age/minor status if provided in request
+    // Modified session initiation logic as per ChatGPT Step 1
+    if (!sessionData.safetyInfo) {
+      if (!sessionData.awaitingSafetyInfo) {
+        sessionData.awaitingSafetyInfo = true;
+
+        const safetyPrompt = `
+Before we start, I'd like to ensure your safety and personalize your experience. Could you please let me know if you have:
+
+✅ Any food allergies or intolerances (e.g., nuts, dairy, gluten)?  
+✅ Any injuries or physical limitations?  
+✅ Any medical conditions or medications I should consider?
+        `;
+
+        sessionData.messages.push({ role: "assistant", content: safetyPrompt });
+
+        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+
+        const headers = { ...corsHeaders, "Content-Type": "application/json" };
+        if (newSession) {
+          headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
+        }
+
+        return new Response(JSON.stringify({
+          message: safetyPrompt,
+          sessionId
+        }), { status: 200, headers });
+      } else {
+        sessionData.safetyInfo = parseSafetyInfo(userMessage);
+        sessionData.awaitingSafetyInfo = false;
+
+        const acknowledgment = generateSafeSuggestions(sessionData.safetyInfo, "mental"); // Default pillar for initial response
+
+        sessionData.messages.push({ role: "user", content: userMessage });
+        sessionData.messages.push({ role: "assistant", content: acknowledgment });
+
+        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+
+        const headers = { ...corsHeaders, "Content-Type": "application/json" };
+        if (newSession) {
+          headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
+        }
+
+        return new Response(JSON.stringify({
+          message: acknowledgment,
+          sessionId,
+          monetize: true,
+          pillar: "mental",
+          upgradeOptions: getMonetizationOptions(request.cf)
+        }), { status: 200, headers });
+      }
+    }
+
     if (body.age !== undefined || body.userAge !== undefined) {
       const ageVal = body.age !== undefined ? body.age : body.userAge;
       let ageNum = ageVal;
@@ -175,12 +283,10 @@ What area would you like to explore today?`;
       }
     }
 
-    // Update tier if provided
     if (body.tier) {
       sessionData.tier = body.tier.toLowerCase();
     }
     
-    // Determine premium status with expanded tier recognition
     const isPremium = [
       "premium", 
       "clinical", 
@@ -189,7 +295,6 @@ What area would you like to explore today?`;
       "payg"
     ].includes(sessionData.tier.toLowerCase());
 
-    // Check for safety triggers in the user message
     const lowerMsg = userMessage.toLowerCase();
     const suicideTriggers = [
       "kill myself", "want to die", "suicide", "end my life", 
@@ -204,26 +309,22 @@ What area would you like to explore today?`;
     const hasEDContent = !hasSuicidalContent && edTriggers.some(phrase => lowerMsg.includes(phrase));
     
     if (hasSuicidalContent || hasEDContent) {
-      // Safety override - don't call the AI
       let safeResponse = "";
       if (hasSuicidalContent) {
-        safeResponse = "I'm really sorry that you're feeling like this. It sounds like you are having thoughts of suicide or self-harm. **Please remember you are not alone and there are people who want to help you.** I strongly encourage you to reach out to a mental health professional or contact an emergency helpline immediately. In Australia, you can call **Lifeline at 13&nbsp;11&nbsp;14** or the **Suicide Call Back Service at 1300&nbsp;659&nbsp;467**. If you feel unsafe, please call **000** (Emergency Services). You might also talk to someone you trust, like a friend or family member, about what you're feeling. You do not have to go through this alone. <br/><br/>**Please reach out for help right away.**";
+        safeResponse = "I'm really sorry that you're feeling like this. It sounds like you are having thoughts of suicide or self-harm. **Please remember you are not alone and there are people who want to help you.** I strongly encourage you to reach out to a mental health professional or contact an emergency helpline immediately. In Australia, you can call **Lifeline at 13 11 14** or the **Suicide Call Back Service at 1300 659 467**. If you feel unsafe, please call **000** (Emergency Services). You might also talk to someone you trust, like a friend or family member, about what you're feeling. You do not have to go through this alone. <br/><br/>**Please reach out for help right away.**";
       } else if (hasEDContent) {
-        safeResponse = "It sounds like you might be struggling with disordered eating or an eating disorder. I'm really sorry you're going through this. **Please know you are not alone and help is available.** I strongly encourage you to seek support from a healthcare professional, like a doctor or counselor, who specializes in eating disorders. In Australia, you can reach out to the **Butterfly Foundation** at **1800&nbsp;ED&nbsp;HOPE (1800&nbsp;33&nbsp;4673)** for advice and support. If you feel it's an emergency or you're in crisis, call **000** or **Lifeline at 13&nbsp;11&nbsp;14**. You deserve help and support, and talking to a professional can make a big difference. <br/><br/>You're not alone, and there are people who care about you.";
+        safeResponse = "It sounds like you might be struggling with disordered eating or an eating disorder. I'm really sorry you're going through this. **Please know you are not alone and help is available.** I strongly encourage you to seek support from a healthcare professional, like a doctor or counselor, who specializes in eating disorders. In Australia, you can reach out to the **Butterfly Foundation** at **1800 ED HOPE (1800 33 4673)** for advice and support. If you feel it's an emergency or you're in crisis, call **000** or **Lifeline at 13 11 14**. You deserve help and support, and talking to a professional can make a big difference. <br/><br/>You're not alone, and there are people who care about you.";
       }
       
-      // Record the conversation
       sessionData.messages.push({ role: "user", content: userMessage });
       sessionData.messages.push({ role: "assistant", content: safeResponse });
       
-      // Save session state to KV
       try {
         await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
       } catch (e) {
         console.log("Error saving session data:", e);
       }
       
-      // Return the safe response
       const headers = { ...corsHeaders, "Content-Type": "application/json" };
       if (newSession) {
         headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
@@ -238,13 +339,9 @@ What area would you like to explore today?`;
       );
     }
 
-    // Check for monetization triggers based on usage and tier
-    const FREE_RESPONSE_LIMIT = 3; // Aligned with business plan
-    
-    // Check if we should monetize based on usage limit
+    const FREE_RESPONSE_LIMIT = 3;
     const shouldMonetize = !isPremium && sessionData.usage >= FREE_RESPONSE_LIMIT;
     
-    // Additional monetization logic based on pillar detection
     let pillar = "mental";
     const clinicalKeywords = ["doctor", "medication", "GLP", "medicine", "prescription", "clinic", "treatment", "diagnosis", "side effect"];
     const nutritionKeywords = ["diet", "calorie", "calories", "protein", "carb", "fat ", "meal", "nutrition", "eat ", "eating", "food", "recipe", "hydration"];
@@ -262,49 +359,19 @@ What area would you like to explore today?`;
     }
     
     if (shouldMonetize) {
-      // User has reached free limit - provide upsell message
       const upsellMessage = `You've reached the limit of free queries in the ${pillar} domain. To continue getting personalized advice and unlock all features, please explore our subscription options.`;
       
-      // Prepare upgrade options
-      const upgradeOptions = [
-        { 
-          name: "PAYG", 
-          description: "Pay-as-you-go flexible support", 
-          url: "https://downscaleai.com/payg" 
-        },
-        { 
-          name: "Essentials", 
-          description: "Comprehensive wellness tracking", 
-          url: "https://downscaleai.com/essentials" 
-        },
-        { 
-          name: "Premium", 
-          description: "Advanced personalized coaching", 
-          url: "https://downscaleai.com/premium" 
-        }
-      ];
-
-      // Add Australian Clinical option if user is in Australia
-      if (request.cf && request.cf.country && request.cf.country.toUpperCase() === "AU") {
-        upgradeOptions.push({
-          name: "Clinical", 
-          description: "Medical-grade weight management", 
-          url: "https://www.downscale.com.au"
-        });
-      }
+      const upgradeOptions = getMonetizationOptions(request.cf);
       
-      // Log interaction
       sessionData.messages.push({ role: "user", content: userMessage });
       sessionData.messages.push({ role: "assistant", content: upsellMessage });
       
-      // Save session
       try {
-        await env["abeai-kv"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
       } catch (e) {
         console.log("Error saving session after monetization:", e);
       }
       
-      // Return the upsell response
       const headers = { ...corsHeaders, "Content-Type": "application/json" };
       if (newSession) {
         headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
@@ -322,10 +389,8 @@ What area would you like to explore today?`;
       );
     }
 
-    // Build the system message with context and guidelines
     let systemContent = "You are Abe, an AI health coach assisting users with weight loss and well-being across clinical, nutrition, activity, and mindset topics. Always respond with a friendly, empathetic tone and provide helpful, evidence-based advice.\n\n";
     
-    // Add pillar-specific context
     if (pillar === "clinical") {
       systemContent += "The user's question is related to clinical/medical advice. Provide general medical information regarding weight management or health, but do **not** give definitive medical diagnoses or prescriptions. Encourage consulting a doctor for any serious medical issues or before making major health changes. ";
     } else if (pillar === "nutrition") {
@@ -336,33 +401,33 @@ What area would you like to explore today?`;
       systemContent += "The user's question relates to mindset or mental well-being. Provide support on motivation, stress management, sleep, or emotional health as it pertains to their weight loss journey. Be encouraging and understanding, promoting healthy coping strategies. ";
     }
     
-    // Age filtering context if minor
     if (sessionData.minor) {
       systemContent += "The user is a minor (under 18), so ensure all advice is appropriate for someone younger. Avoid recommendations not suitable for adolescents (like certain supplements or extreme diets) and encourage involving a parent/guardian or a doctor when necessary. ";
     }
     
-    // Localization for Australian users
     if (request.cf && request.cf.country && request.cf.country.toUpperCase() === "AU") {
       systemContent += "Use Australian English spelling and examples relevant to Australia when appropriate (for instance, use \"kilograms\" and \"kilojoules\" for weight and energy, and terms like \"Mum\" instead of \"Mom\"). ";
     }
     
-    // General safety and diary logging instruction
+    // Added safety info to systemContent as per ChatGPT Step 3
+    systemContent += `
+User Allergies/Intolerances: ${sessionData.safetyInfo.nutrition}.
+Activity Limitations/Injuries: ${sessionData.safetyInfo.activity}.
+Medical Conditions/Medications: ${sessionData.safetyInfo.clinical}.
+Always avoid recommendations conflicting with the above.`;
+
     systemContent += "Never encourage unsafe or unhealthy behaviors (like self-harm, starvation, or dangerous weight loss tactics). If the user seems to be in crisis or asking for harmful advice, respond with care and encourage seeking professional help. Also, when it fits naturally, remind the user about keeping a health diary or log (for example, a food diary, exercise log, or mood journal) to track their progress. Do not force the topic, but gently suggest it if it would help. ";
     systemContent += "\nNow, answer the user's question helpfully.";
 
-    // Assemble the OpenAI chat messages array
     const openaiMessages = [];
     openaiMessages.push({ role: "system", content: systemContent });
     
-    // Include conversation history for context
     for (const msg of sessionData.messages) {
       openaiMessages.push(msg);
     }
     
-    // Add the latest user message
     openaiMessages.push({ role: "user", content: userMessage });
 
-    // Prepare the OpenAI API request
     const model = isPremium ? "gpt-4" : "gpt-3.5-turbo";
     const payload = {
       model: model,
@@ -371,22 +436,16 @@ What area would you like to explore today?`;
       max_tokens: isPremium ? 2000 : 1000
     };
     
-    // CORRECT: Use the proper base gateway URL
     const gatewayBaseUrl = "https://gateway.ai.cloudflare.com/v1/d9cc7ec108df8e78246e2553ae88c6c2/abeai-openai-gateway/openai";
-    
-    // CORRECT: Append the specific endpoint path to the base URL
     const apiUrl = `${gatewayBaseUrl}/chat/completions`;
     
-    // Log the full URL being used
     console.log("Using API URL:", apiUrl);
     
-    // Headers for Cloudflare AI Gateway
     const apiHeaders = {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${env.OPENAI_KEY}`
     };
 
-    // Execute the API call with retry logic
     let aiResponse;
     let aiResult;
     const maxRetries = 3;
@@ -406,7 +465,6 @@ What area would you like to explore today?`;
       }
       
       if (aiResponse && aiResponse.ok) {
-        // Successful response
         try {
           aiResult = await aiResponse.json();
           break;
@@ -418,21 +476,19 @@ What area would you like to explore today?`;
           );
         }
       } else if (aiResponse && (aiResponse.status === 429 || aiResponse.status === 503 || aiResponse.status === 524)) {
-        // Rate limited or service unavailable - retry
         if (attempt < maxRetries) {
           console.log(`Retrying after status ${aiResponse.status}`);
           await new Promise(res => setTimeout(res, waitTime));
           waitTime *= 2;
           continue;
         } else {
-          // Max retries reached
           let errorMsg = `AI service error (status ${aiResponse.status})`;
           try {
             const errorData = await aiResponse.json();
             if (errorData.error && errorData.error.message) {
               errorMsg = errorData.error.message;
             }
-          } catch (_) { /* ignore parse errors for error body */ }
+          } catch (_) {}
           
           console.log("Final error after retries:", errorMsg);
           return new Response(
@@ -441,7 +497,6 @@ What area would you like to explore today?`;
           );
         }
       } else {
-        // Other error
         if (attempt < maxRetries) {
           console.log(`Retrying after unknown error (attempt ${attempt})`);
           await new Promise(res => setTimeout(res, waitTime));
@@ -458,7 +513,6 @@ What area would you like to explore today?`;
       }
     }
 
-    // Ensure we have the AI result
     if (!aiResult) {
       console.log("No AI result received");
       return new Response(
@@ -467,7 +521,6 @@ What area would you like to explore today?`;
       );
     }
 
-    // Extract the assistant's reply
     let assistantMessage = "";
     if (aiResult.choices && aiResult.choices.length > 0 && aiResult.choices[0].message) {
       assistantMessage = aiResult.choices[0].message.content ?? "";
@@ -481,10 +534,8 @@ What area would you like to explore today?`;
       );
     }
 
-    // Check if this is message 3-5 and should trigger monetization for free users
     const shouldAddMonetizationHint = !isPremium && sessionData.usage >= 2 && sessionData.usage <= 4;
     
-    // Add diary/logging prompt if not already mentioned
     if (!sessionData.offeredDiary[pillar]) {
       const answerLower = assistantMessage.toLowerCase();
       if (!answerLower.includes("diary") && !answerLower.includes("journal") && !answerLower.includes("log ")) {
@@ -505,33 +556,28 @@ What area would you like to explore today?`;
       sessionData.offeredDiary[pillar] = true;
     }
     
-    // Add monetization hint if appropriate
     if (shouldAddMonetizationHint) {
       assistantMessage += "\n\n*Looking for more personalized guidance? Consider upgrading to our Premium plan for tailored advice and unlimited conversations.*";
     }
 
-    // Update session conversation history and usage count
     sessionData.messages.push({ role: "user", content: userMessage });
     sessionData.messages.push({ role: "assistant", content: assistantMessage });
     sessionData.usage += 1;
 
-    // Save the updated session data to KV
     try {
       await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
     } catch (e) {
       console.log("Error saving final session data:", e);
     }
 
-    // CORRECTED FINAL RESPONSE: Changed 'content' to 'message' to match frontend expectations
     const responseBody = {
-      message: assistantMessage,  // Changed from 'content' to 'message'
+      message: assistantMessage,
       sessionId: sessionId,
       usage: sessionData.usage,
       pillar: pillar,
       tier: sessionData.tier
     };
     
-    // Set headers and return
     const responseHeaders = { ...corsHeaders, "Content-Type": "application/json" };
     if (newSession) {
       responseHeaders["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
