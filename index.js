@@ -236,7 +236,8 @@ What area would you like to explore today?`;
         safetyInfo: null,
         awaitingSafetyInfo: false,
         pendingQuery: null,
-        safetyInfoProvided: false
+        safetyInfoProvided: false,
+        inSafetyFlow: false
       };
     }
 
@@ -245,6 +246,7 @@ What area would you like to explore today?`;
       if (!sessionData.awaitingSafetyInfo) {
         sessionData.awaitingSafetyInfo = true;
         sessionData.pendingQuery = userMessage;
+        sessionData.inSafetyFlow = true;
         const safetyPrompt = `
 Before we start, could you please inform me about:
 ✅ Any food allergies or intolerances?
@@ -279,51 +281,20 @@ Before we start, could you please inform me about:
       } else {
         sessionData.safetyInfo = parseSafetyInfo(userMessage);
         sessionData.awaitingSafetyInfo = false;
+        sessionData.inSafetyFlow = false;
 
-        const pillar = determinePillar(sessionData.pendingQuery);
+        const pillar = determinePillar(sessionData.pendingQuery || userMessage);
         const safeReply = generateSafeSuggestions(sessionData.safetyInfo, pillar);
 
-        if (safeReply && !safeReply.startsWith("Thanks for sharing!")) {
-          sessionData.messages.push({ role: "assistant", content: safeReply });
-          sessionData.pendingQuery = null;
-          sessionData.safetyInfoProvided = true;
-          sessionData.usage += 1;
-
-          try {
-            await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
-          } catch (e) {
-            console.log("KV Save Error after safe suggestions:", e);
-            return new Response(
-              JSON.stringify({ error: "Failed to save session data" }),
-              { 
-                status: 500, 
-                headers: { ...corsHeaders, "Content-Type": "application/json" } 
-              }
-            );
-          }
-
-          const headers = { ...corsHeaders, "Content-Type": "application/json" };
-          if (newSession) {
-            headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
-          }
-
-          return new Response(
-            JSON.stringify({ message: safeReply, sessionId }),
-            { status: 200, headers }
-          );
-        }
-
-        const acknowledgment = "Thank you! Let's proceed.";
-        userMessage = sessionData.pendingQuery || "How can you assist me?";
-        sessionData.pendingQuery = null;
-
         sessionData.messages.push({ role: "user", content: userMessage });
-        sessionData.messages.push({ role: "assistant", content: acknowledgment });
+        sessionData.messages.push({ role: "assistant", content: safeReply });
+        sessionData.safetyInfoProvided = true;
+        sessionData.pendingQuery = null;
 
         try {
           await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
         } catch (e) {
-          console.log("KV Save Error after safety response:", e);
+          console.log("KV Save Error after safe suggestions:", e);
           return new Response(
             JSON.stringify({ error: "Failed to save session data" }),
             { 
@@ -332,6 +303,16 @@ Before we start, could you please inform me about:
             }
           );
         }
+
+        const headers = { ...corsHeaders, "Content-Type": "application/json" };
+        if (newSession) {
+          headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
+        }
+
+        return new Response(
+          JSON.stringify({ message: safeReply, sessionId }),
+          { status: 200, headers }
+        );
       }
     }
 
@@ -411,8 +392,9 @@ Before we start, could you please inform me about:
 
     const FREE_RESPONSE_LIMIT = 3;
     const reachedFreeLimit = !isPremium && sessionData.usage >= FREE_RESPONSE_LIMIT;
-    if (reachedFreeLimit && !sessionData.safetyInfoProvided) {
-      const upsellMessage = `You've reached your free query limit for this area. Please explore subscription options for continued personalized support.`;
+    if (reachedFreeLimit && !sessionData.safetyInfoProvided && !sessionData.inSafetyFlow) {
+      const pillar = determinePillar(userMessage);
+      const upsellMessage = `You've reached your free query limit for the ${pillar} area. Please explore subscription options for continued personalized support.`;
       const upgradeOptions = getMonetizationOptions(request.cf);
 
       const headers = { ...corsHeaders, "Content-Type": "application/json" };
@@ -439,7 +421,7 @@ Before we start, could you please inform me about:
         message: upsellMessage,
         monetize: true,
         sessionId,
-        pillar: determinePillar(userMessage),
+        pillar,
         upgradeOptions
       }), { status: 200, headers });
     }
