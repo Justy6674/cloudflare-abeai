@@ -10,8 +10,8 @@ function parseSafetyInfo(userMessage) {
     return safetyInfo;
   }
 
-  const nutritionKeywords = ["nut", "dairy", "gluten", "shellfish", "soy", "egg", "fish"];
-  const activityKeywords = ["injury", "knee", "back", "joint", "limitation", "pain"];
+  const nutritionKeywords = ["nut", "peanut", "dairy", "milk", "lactose", "gluten", "shellfish", "soy", "egg", "fish"];
+  const activityKeywords = ["injury", "knee", "back", "joint", "shoulder", "ankle", "limitation", "pain"];
   const clinicalKeywords = ["medication", "medicine", "condition", "diabetes", "blood pressure"];
 
   nutritionKeywords.forEach(word => {
@@ -75,6 +75,21 @@ function getMonetizationOptions(cf) {
   }
 
   return options;
+}
+
+// Helper to determine pillar from user message
+function determinePillar(message) {
+  const lowerMsg = message.toLowerCase();
+  const clinicalKeywords = ["doctor", "medication", "GLP", "medicine", "prescription", "clinic", "treatment", "diagnosis", "side effect"];
+  const nutritionKeywords = ["diet", "calorie", "calories", "protein", "carb", "fat ", "meal", "nutrition", "eat ", "eating", "food", "recipe", "snack", "hydration"];
+  const activityKeywords = ["exercise", "workout", "work out", "gym", "sport", "training", "run", "running", "walk", "walking", "yoga", "activity", "active", "steps"];
+  const mentalKeywords = ["motivation", "stress", "anxiety", "depression", "mood", "sleep", "mindset", "mental", "therapy", "habit", "feel", "feeling"];
+
+  if (clinicalKeywords.some(w => lowerMsg.includes(w))) return "clinical";
+  if (nutritionKeywords.some(w => lowerMsg.includes(w))) return "nutrition";
+  if (activityKeywords.some(w => lowerMsg.includes(w))) return "activity";
+  if (mentalKeywords.some(w => lowerMsg.includes(w))) return "mental";
+  return "mental"; // Default
 }
 
 export default {
@@ -220,7 +235,8 @@ What area would you like to explore today?`;
         offeredDiary: { clinical: false, nutrition: false, activity: false, mental: false },
         safetyInfo: null,
         awaitingSafetyInfo: false,
-        pendingQuery: null
+        pendingQuery: null,
+        safetyInfoProvided: false
       };
     }
 
@@ -263,6 +279,39 @@ Before we start, could you please inform me about:
       } else {
         sessionData.safetyInfo = parseSafetyInfo(userMessage);
         sessionData.awaitingSafetyInfo = false;
+
+        const pillar = determinePillar(sessionData.pendingQuery);
+        const safeReply = generateSafeSuggestions(sessionData.safetyInfo, pillar);
+
+        if (safeReply && !safeReply.startsWith("Thanks for sharing!")) {
+          sessionData.messages.push({ role: "assistant", content: safeReply });
+          sessionData.pendingQuery = null;
+          sessionData.safetyInfoProvided = true;
+          sessionData.usage += 1;
+
+          try {
+            await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+          } catch (e) {
+            console.log("KV Save Error after safe suggestions:", e);
+            return new Response(
+              JSON.stringify({ error: "Failed to save session data" }),
+              { 
+                status: 500, 
+                headers: { ...corsHeaders, "Content-Type": "application/json" } 
+              }
+            );
+          }
+
+          const headers = { ...corsHeaders, "Content-Type": "application/json" };
+          if (newSession) {
+            headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
+          }
+
+          return new Response(
+            JSON.stringify({ message: safeReply, sessionId }),
+            { status: 200, headers }
+          );
+        }
 
         const acknowledgment = "Thank you! Let's proceed.";
         userMessage = sessionData.pendingQuery || "How can you assist me?";
@@ -361,26 +410,9 @@ Before we start, could you please inform me about:
     }
 
     const FREE_RESPONSE_LIMIT = 3;
-    const shouldMonetize = !isPremium && sessionData.usage >= FREE_RESPONSE_LIMIT;
-
-    let pillar = "mental";
-    const clinicalKeywords = ["doctor", "medication", "GLP", "medicine", "prescription", "clinic", "treatment", "diagnosis", "side effect"];
-    const nutritionKeywords = ["diet", "calorie", "calories", "protein", "carb", "fat ", "meal", "nutrition", "eat ", "eating", "food", "recipe", "hydration"];
-    const activityKeywords = ["exercise", "workout", "work out", "gym", "sport", "training", "run", "running", "walk", "walking", "yoga", "activity", "active", "steps"];
-    const mentalKeywords = ["motivation", "stress", "anxiety", "depression", "mood", "sleep", "mindset", "mental", "therapy", "habit", "feel", "feeling"];
-    
-    if (clinicalKeywords.some(w => lowerMsg.includes(w))) {
-      pillar = "clinical";
-    } else if (nutritionKeywords.some(w => lowerMsg.includes(w))) {
-      pillar = "nutrition";
-    } else if (activityKeywords.some(w => lowerMsg.includes(w))) {
-      pillar = "activity";
-    } else if (mentalKeywords.some(w => lowerMsg.includes(w))) {
-      pillar = "mental";
-    }
-
-    if (shouldMonetize) {
-      const upsellMessage = `You've reached your free query limit for the ${pillar} area. Please explore subscription options for continued personalized support.`;
+    const reachedFreeLimit = !isPremium && sessionData.usage >= FREE_RESPONSE_LIMIT;
+    if (reachedFreeLimit && !sessionData.safetyInfoProvided) {
+      const upsellMessage = `You've reached your free query limit for this area. Please explore subscription options for continued personalized support.`;
       const upgradeOptions = getMonetizationOptions(request.cf);
 
       const headers = { ...corsHeaders, "Content-Type": "application/json" };
@@ -407,12 +439,23 @@ Before we start, could you please inform me about:
         message: upsellMessage,
         monetize: true,
         sessionId,
-        pillar,
+        pillar: determinePillar(userMessage),
         upgradeOptions
       }), { status: 200, headers });
     }
 
-    let systemContent = "You are Abe, an AI health coach assisting users with weight loss and well-being across clinical, nutrition, activity, and mindset topics. Always respond with a friendly, empathetic tone and provide helpful, evidence-based advice.\n\n";
+    let pillar = determinePillar(userMessage);
+    
+    let systemContent = `You are Abe, an AI health coach assisting users with weight loss and well-being across clinical, nutrition, activity, and mindset topics. Always respond in a friendly, patient, and nurturing tone, providing helpful and evidence-based advice.
+
+The user has provided the following safety information:
+- Allergies/Intolerances: ${sessionData.safetyInfo.nutrition}
+- Injuries/Physical Limits: ${sessionData.safetyInfo.activity}
+- Medical Conditions/Medications: ${sessionData.safetyInfo.clinical}
+
+Always adapt your suggestions to these needs. **Never recommend foods, exercises, or activities that conflict with the above constraints.** Instead, offer safe alternatives or modifications. For example, if the user has a nut allergy, any food suggestions must be nut-free.
+
+They have trusted you with personal health information; always respond with understanding and use that information to personalize your advice.`;
     
     if (pillar === "clinical") {
       systemContent += "The user's question is related to clinical/medical advice. Provide general medical information regarding weight management or health, but do **not** give definitive medical diagnoses or prescriptions. Encourage consulting a doctor for any serious medical issues or before making major health changes. ";
@@ -432,14 +475,8 @@ Before we start, could you please inform me about:
       systemContent += "Use Australian English spelling and examples relevant to Australia when appropriate (for instance, use \"kilograms\" and \"kilojoules\" for weight and energy, and terms like \"Mum\" instead of \"Mom\"). ";
     }
     
-    systemContent += `
-User Allergies/Intolerances: ${sessionData.safetyInfo.nutrition}.
-Activity Limitations/Injuries: ${sessionData.safetyInfo.activity}.
-Medical Conditions/Medications: ${sessionData.safetyInfo.clinical}.
-Always avoid recommendations conflicting with the above.`;
-
     systemContent += "Never encourage unsafe or unhealthy behaviors (like self-harm, starvation, or dangerous weight loss tactics). If the user seems to be in crisis or asking for harmful advice, respond with care and encourage seeking professional help. Also, when it fits naturally, remind the user about keeping a health diary or log (for example, a food diary, exercise log, or mood journal) to track their progress. Do not force the topic, but gently suggest it if it would help. ";
-    systemContent += "\nNow, answer the user's question helpfully.";
+    systemContent += "\nNow, given the user's question, provide a helpful answer that respects their personal needs and remains supportive.";
 
     const openaiMessages = [];
     openaiMessages.push({ role: "system", content: systemContent });
@@ -594,13 +631,14 @@ Always avoid recommendations conflicting with the above.`;
     }
     
     if (shouldAddMonetizationHint) {
-      assistantMessage += "\n\n*Looking for more personalized guidance? Consider upgrading to our Premium plan for tailored advice and unlimited conversations.*";
+      assistantMessage += "\n\nIf you’d like to dive deeper or get more personalized plans, I’m here to support you through our Premium plan.";
     }
 
     sessionData.messages.push({ role: "user", content: userMessage });
     sessionData.messages.push({ role: "assistant", content: assistantMessage });
 
     sessionData.usage += 1;
+    sessionData.safetyInfoProvided = false; // Reset after each non-safety response
 
     try {
       await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
