@@ -309,9 +309,6 @@ Before we start, could you please inform me about:
         sessionData.messages.push({ role: "assistant", content: safeReply });
         sessionData.safetyInfoProvided = true;
         sessionData.pendingQuery = null;
-        if (pillar === "nutrition") {
-          sessionData.nutritionResponses += 1;
-        }
 
         try {
           await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
@@ -328,15 +325,11 @@ Before we start, could you please inform me about:
 
         console.log(`Safe suggestions sent, usage: ${sessionData.usage}, nutritionResponses: ${sessionData.nutritionResponses}`);
 
-        const headers = { ...corsHeaders, "Content-Type": "application/json" };
-        if (newSession) {
-          headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
+        // Recall the original user query after safety check
+        if (sessionData.pendingQuery) {
+          userMessage = sessionData.pendingQuery;
+          sessionData.pendingQuery = null;
         }
-
-        return new Response(
-          JSON.stringify({ message: safeReply, sessionId }),
-          { status: 200, headers }
-        );
       }
     }
 
@@ -425,4 +418,7 @@ The user has provided the following safety information:
 
 Always adapt your suggestions to these needs. **Never recommend foods, exercises, or activities that conflict with the above constraints.** Instead, offer safe alternatives or modifications. For example, if the user has a nut allergy, any food suggestions must be nut-free.
 
-They have trusted you with personal health information; always respond with understanding and
+They have trusted you with personal health information; always respond with understanding and use that information to personalize your advice.`;
+    
+    if (pillar === "clinical") {
+      systemContent += "The user's question is related to clinical/medical advice. Provide general medical information regarding weight
