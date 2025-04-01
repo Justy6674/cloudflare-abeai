@@ -517,7 +517,7 @@ What area would you like to explore today?`;
 
     // Save the updated session data to KV
     try {
-      await env["abeai-kv"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+      await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
     } catch (e) {
       console.log("Error saving final session data:", e);
     }
