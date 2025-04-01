@@ -1,7 +1,6 @@
 // Parses raw user message into structured safety information
 function parseSafetyInfo(userMessage) {
   const safetyInfo = { nutrition: "", activity: "", clinical: "" };
-
   const lowerMsg = userMessage.toLowerCase();
 
   if (lowerMsg === "no" || lowerMsg.trim() === "") {
@@ -112,7 +111,10 @@ What area would you like to explore today?`;
       corsHeaders["Access-Control-Allow-Origin"] = origin;
     } else if (origin) {
       console.log(`🚫 Unauthorized origin attempt: ${origin}`);
-      return new Response("Unauthorized origin", { status: 401 });
+      return new Response("Unauthorized origin", { 
+        status: 401, 
+        headers: corsHeaders 
+      });
     } else {
       corsHeaders["Access-Control-Allow-Origin"] = "*";
     }
@@ -164,7 +166,10 @@ What area would you like to explore today?`;
 
       return new Response(
         JSON.stringify(welcomeResponse),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { 
+          status: 200, 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        }
       );
     }
     
@@ -183,7 +188,6 @@ What area would you like to explore today?`;
     let sessionId = userId || null;
     let newSession = false;
 
-    // Check cookie for existing session
     if (!sessionId) {
       const cookieHeader = request.headers.get("Cookie") || "";
       const sessionMatch = cookieHeader.match(/(?:^|;)\s*session_id=([^;]+)/);
@@ -191,7 +195,6 @@ What area would you like to explore today?`;
       newSession = !sessionMatch;
     }
 
-    // Load session data from KV
     let sessionData;
     try {
       const kvKey = `session:${sessionId}`;
@@ -199,10 +202,15 @@ What area would you like to explore today?`;
       sessionData = stored ? JSON.parse(stored) : null;
     } catch (e) {
       console.log("KV Load Error:", e);
-      sessionData = null;
+      return new Response(
+        JSON.stringify({ error: "Failed to load session data" }),
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        }
+      );
     }
 
-    // Correct session initialization
     if (!sessionData) {
       sessionData = {
         messages: [],
@@ -220,7 +228,7 @@ What area would you like to explore today?`;
     if (!sessionData.safetyInfo) {
       if (!sessionData.awaitingSafetyInfo) {
         sessionData.awaitingSafetyInfo = true;
-        sessionData.pendingQuery = userMessage; // Store original user query here
+        sessionData.pendingQuery = userMessage;
         const safetyPrompt = `
 Before we start, could you please inform me about:
 ✅ Any food allergies or intolerances?
@@ -228,37 +236,53 @@ Before we start, could you please inform me about:
 ✅ Medical conditions or medications?
 `;
 
-        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+        sessionData.messages.push({ role: "assistant", content: safetyPrompt });
+
+        try {
+          await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+        } catch (e) {
+          console.log("KV Save Error during safety prompt:", e);
+          return new Response(
+            JSON.stringify({ error: "Failed to save session data" }),
+            { 
+              status: 500, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            }
+          );
+        }
 
         const headers = { ...corsHeaders, "Content-Type": "application/json" };
         if (newSession) {
           headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
         }
 
-        return new Response(JSON.stringify({ message: safetyPrompt, sessionId }), { status: 200, headers });
+        return new Response(
+          JSON.stringify({ message: safetyPrompt, sessionId }),
+          { status: 200, headers }
+        );
       } else {
-        // Capture safety info clearly and proceed immediately to user's original question
         sessionData.safetyInfo = parseSafetyInfo(userMessage);
         sessionData.awaitingSafetyInfo = false;
 
         const acknowledgment = "Thank you! Let's proceed.";
-
-        // Retrieve original query
         userMessage = sessionData.pendingQuery || "How can you assist me?";
-        sessionData.pendingQuery = null; // Clear it after use
+        sessionData.pendingQuery = null;
 
         sessionData.messages.push({ role: "user", content: userMessage });
         sessionData.messages.push({ role: "assistant", content: acknowledgment });
 
-        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
-
-        const headers = { ...corsHeaders, "Content-Type": "application/json" };
-        if (newSession) {
-          headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
+        try {
+          await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+        } catch (e) {
+          console.log("KV Save Error after safety response:", e);
+          return new Response(
+            JSON.stringify({ error: "Failed to save session data" }),
+            { 
+              status: 500, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            }
+          );
         }
-
-        // Now immediately proceed to answer user's original question
-        // (don't return here, continue to AI processing below)
       }
     }
 
@@ -313,6 +337,13 @@ Before we start, could you please inform me about:
         await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
       } catch (e) {
         console.log("Error saving session data:", e);
+        return new Response(
+          JSON.stringify({ error: "Failed to save session data" }),
+          { 
+            status: 500, 
+            headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          }
+        );
       }
       
       const headers = { ...corsHeaders, "Content-Type": "application/json" };
@@ -332,28 +363,6 @@ Before we start, could you please inform me about:
     const FREE_RESPONSE_LIMIT = 3;
     const shouldMonetize = !isPremium && sessionData.usage >= FREE_RESPONSE_LIMIT;
 
-    if (shouldMonetize) {
-      const upsellMessage = `You've reached your free query limit for the ${pillar} area. Please explore subscription options for continued personalized support.`;
-      const upgradeOptions = getMonetizationOptions(request.cf);
-
-      const headers = { ...corsHeaders, "Content-Type": "application/json" };
-      if (newSession) {
-        headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
-      }
-
-      sessionData.messages.push({ role: "assistant", content: upsellMessage });
-
-      await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
-
-      return new Response(JSON.stringify({
-        message: upsellMessage,
-        monetize: true,
-        sessionId,
-        pillar,
-        upgradeOptions
-      }), { status: 200, headers });
-    }
-
     let pillar = "mental";
     const clinicalKeywords = ["doctor", "medication", "GLP", "medicine", "prescription", "clinic", "treatment", "diagnosis", "side effect"];
     const nutritionKeywords = ["diet", "calorie", "calories", "protein", "carb", "fat ", "meal", "nutrition", "eat ", "eating", "food", "recipe", "hydration"];
@@ -368,6 +377,39 @@ Before we start, could you please inform me about:
       pillar = "activity";
     } else if (mentalKeywords.some(w => lowerMsg.includes(w))) {
       pillar = "mental";
+    }
+
+    if (shouldMonetize) {
+      const upsellMessage = `You've reached your free query limit for the ${pillar} area. Please explore subscription options for continued personalized support.`;
+      const upgradeOptions = getMonetizationOptions(request.cf);
+
+      const headers = { ...corsHeaders, "Content-Type": "application/json" };
+      if (newSession) {
+        headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
+      }
+
+      sessionData.messages.push({ role: "assistant", content: upsellMessage });
+
+      try {
+        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
+      } catch (e) {
+        console.log("KV Save Error during monetization:", e);
+        return new Response(
+          JSON.stringify({ error: "Failed to save session data" }),
+          { 
+            status: 500, 
+            headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          }
+        );
+      }
+
+      return new Response(JSON.stringify({
+        message: upsellMessage,
+        monetize: true,
+        sessionId,
+        pillar,
+        upgradeOptions
+      }), { status: 200, headers });
     }
 
     let systemContent = "You are Abe, an AI health coach assisting users with weight loss and well-being across clinical, nutrition, activity, and mindset topics. Always respond with a friendly, empathetic tone and provide helpful, evidence-based advice.\n\n";
@@ -452,7 +494,10 @@ Always avoid recommendations conflicting with the above.`;
           console.log("Failed to parse AI response:", e);
           return new Response(
             JSON.stringify({ error: "Failed to parse AI response" }),
-            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            { 
+              status: 500, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            }
           );
         }
       } else if (aiResponse && (aiResponse.status === 429 || aiResponse.status === 503 || aiResponse.status === 524)) {
@@ -473,7 +518,10 @@ Always avoid recommendations conflicting with the above.`;
           console.log("Final error after retries:", errorMsg);
           return new Response(
             JSON.stringify({ error: errorMsg }),
-            { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            { 
+              status: 502, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            }
           );
         }
       } else {
@@ -487,7 +535,10 @@ Always avoid recommendations conflicting with the above.`;
           console.log(`Failed all retries, status: ${statusCode}`);
           return new Response(
             JSON.stringify({ error: "Failed to retrieve a response from the AI service." }),
-            { status: statusCode, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            { 
+              status: statusCode, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            }
           );
         }
       }
@@ -497,7 +548,10 @@ Always avoid recommendations conflicting with the above.`;
       console.log("No AI result received");
       return new Response(
         JSON.stringify({ error: "No response from AI service" }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { 
+          status: 502, 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        }
       );
     }
 
@@ -510,7 +564,10 @@ Always avoid recommendations conflicting with the above.`;
       console.log("AI returned empty message");
       return new Response(
         JSON.stringify({ error: "AI returned an empty message" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        }
       );
     }
 
@@ -543,14 +600,19 @@ Always avoid recommendations conflicting with the above.`;
     sessionData.messages.push({ role: "user", content: userMessage });
     sessionData.messages.push({ role: "assistant", content: assistantMessage });
 
-    // Increment usage only after successful AI call
     sessionData.usage += 1;
 
-    // Now store KV
     try {
       await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
     } catch (e) {
       console.log("Final KV Save Error:", e);
+      return new Response(
+        JSON.stringify({ error: "Failed to save session data" }),
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        }
+      );
     }
 
     const responseBody = {
