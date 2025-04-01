@@ -411,26 +411,4 @@ Before we start, could you please inform me about:
       sessionData.messages.push({ role: "assistant", content: safeResponse });
       
       try {
-        await env["ABEAI_KV"].put(`session:${sessionId}`, JSON.stringify(sessionData));
-      } catch (e) {
-        console.log("Error saving session data:", e);
-        return new Response(
-          JSON.stringify({ error: "Failed to save session data" }),
-          { 
-            status: 500, 
-            headers: { ...corsHeaders, "Content-Type": "application/json" } 
-          }
-        );
-      }
-      
-      const headers = { ...corsHeaders, "Content-Type": "application/json" };
-      if (newSession) {
-        headers["Set-Cookie"] = `session_id=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000`;
-      }
-      
-      return new Response(
-        JSON.stringify({ 
-          message: safeResponse,
-          sessionId: sessionId
-        }),
-        { status: 
+        await env["
